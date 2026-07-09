@@ -438,16 +438,31 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql/data
       - ../docs/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7
     ports: ["6379:6379"]
     networks: [logistics-net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   rabbitmq:
     image: rabbitmq:3.13-management
     ports: ["5672:5672", "15672:15672"]
     networks: [logistics-net]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
 
   kafka-1:
     image: apache/kafka:3.7.0
@@ -457,12 +472,20 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_DEFAULT_REPLICATION_FACTOR: 3
       KAFKA_MIN_INSYNC_REPLICAS: 2
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
     ports: ["9092:9092"]
     networks: [logistics-net]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
 
   kafka-2:
     image: apache/kafka:3.7.0
@@ -472,12 +495,20 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_DEFAULT_REPLICATION_FACTOR: 3
       KAFKA_MIN_INSYNC_REPLICAS: 2
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
     ports: ["9095:9092"]
     networks: [logistics-net]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
 
   kafka-3:
     image: apache/kafka:3.7.0
@@ -487,29 +518,33 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_DEFAULT_REPLICATION_FACTOR: 3
       KAFKA_MIN_INSYNC_REPLICAS: 2
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
     ports: ["9096:9092"]
     networks: [logistics-net]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
 
   kafka-init:
     image: apache/kafka:3.7.0
-    depends_on: [kafka-1, kafka-2, kafka-3]
+    depends_on:
+      kafka-1: { condition: service_healthy }
+      kafka-2: { condition: service_healthy }
+      kafka-3: { condition: service_healthy }
     networks: [logistics-net]
     entrypoint: ["/bin/bash", "-c"]
     command: >
-      "
-      until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:9092 --list > /dev/null 2>&1; do
-        echo 'waiting for kafka brokers...'; sleep 2;
-      done;
-      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists
-        --topic order.status_changed
-        --partitions 3
-        --replication-factor 3
-        --config min.insync.replicas=2
-        --bootstrap-server kafka-1:9092;
+      "set -e;
+      until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:9092 --list > /dev/null 2>&1; do echo 'waiting for kafka brokers...'; sleep 2; done;
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic order.status_changed --partitions 3 --replication-factor 3 --config min.insync.replicas=2 --bootstrap-server kafka-1:9092;
       echo 'order.status_changed created: 3 partitions, RF=3, min.insync.replicas=2';
       "
     restart: "no"
@@ -526,6 +561,13 @@ services:
 volumes:
   pg-data:
 ```
+
+**Fixed during Phase 0 execution — three real gaps this planning process didn't catch, only actually running it did:**
+1. **Missing KRaft listener config.** All three brokers crash-looped on first run (`IllegalArgumentException: No security protocol defined for listener CONTROLLER`) — the plan never set `KAFKA_LISTENER_SECURITY_PROTOCOL_MAP`, `KAFKA_CONTROLLER_LISTENER_NAMES`, or `KAFKA_INTER_BROKER_LISTENER_NAME`, all required for a custom `CONTROLLER` listener name to have an inferable protocol. Added to all three brokers above.
+2. **`kafka-init`'s YAML folding bug.** The `command: >` folded scalar doesn't fold *more-indented* continuation lines the way the original multi-line command assumed — `kafka-topics.sh --create` actually ran as several broken invocations, failed with a missing `--bootstrap-server` argument, and **failed silently**: no `set -e` meant the script fell through to the trailing `echo` and exited 0 anyway. `docker compose ps` would have shown a clean exit for a container that did nothing — this is the same "artifact exists, nothing verifies it ran correctly" shape as the CI-gating bug found earlier, just at the compose layer. Fixed by collapsing the command to one line and adding `set -e` so a real failure now actually propagates.
+3. **No healthchecks.** `depends_on` without a health condition only waits for "container started," not "ready to accept connections" — harmless for `kafka-init` (which has its own retry loop) but a real race risk for Phase 1+ app containers connecting directly via `kafkajs`/`aiokafka` with no such loop of their own. Healthchecks added above for `postgres`, `redis`, `rabbitmq`, and all three Kafka brokers; `kafka-init`'s `depends_on` now uses `condition: service_healthy` on the brokers instead of relying solely on its own polling loop. Phase 1's `docker-compose.dev.yml` (Section 22) should use `condition: service_healthy` (and `condition: service_completed_successfully` for `kafka-init` specifically, since it's meant to exit, not stay up) rather than the bare dependency list shown there currently.
+
+**Verification actually performed for these three, not just "it started":** `kafka-topics.sh --describe` (confirmed 3 partitions, RF=3, min ISR=2, no under-replication), kafka-ui's cluster API (3 brokers online, 3 partitions), `psql \dn`/`\du`/`\ddp` (all 6 schemas, all 12 roles, default-privilege grants matching Section 13 exactly — e.g. `audit_app` showing read/insert only, no write/delete, confirming the append-only enforcement holds at the role level in practice, not just on paper).
 
 **Fixed gap — `init.sql` was defined (Section 13) but never actually wired to run.** The `postgres` service previously had no mechanism to execute the schema/role/grant SQL at all — the official Postgres image only auto-runs files mounted into `/docker-entrypoint-initdb.d/`, and nothing mounted anything there. As written, none of the six schemas, twelve roles, or default-privilege rules would have been created, and every service's `DATABASE_URL`/`MIGRATION_DATABASE_URL` would fail to authenticate on `docker compose up` — the same "correct artifact, no wiring to the thing that runs it" bug found earlier for the contract-drift CI job, one layer further down the stack. The mount above fixes it, and **the actual file now exists** — schemas + the two-tier role/grant block, no `CREATE TABLE` statements (per Section 13's design, tables are delivered by each service's own migration, not by `init.sql`). Save it to `docs/init.sql` in the repo to match the mount path above.
 

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "trace_id": "trc_bad",
+  "order_id": "ord_999",
+  "customer_id": "cust_999",
+  "previous_status": "SHIPPED",
+  "new_status": "TELEPORTED",
+  "timestamp": "2026-07-09T10:15:00Z",
+  "delivery_address": "Nowhere",
+  "order_value": -50,
+  "items": [],
+  "metadata": { "branch_id": "branch_02" }
+}

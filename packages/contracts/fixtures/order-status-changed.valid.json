@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "trace_id": "trc_9f8e7d6c-1234-4a5b-8c9d-abcdef123456",
+  "order_id": "ord_123",
+  "customer_id": "cust_456",
+  "previous_status": "PICKING",
+  "new_status": "PACKED",
+  "timestamp": "2026-07-09T10:15:00Z",
+  "delivery_address": "123 Main St, Dagupan",
+  "order_value": 1450.00,
+  "items": [{ "sku": "SKU001", "qty": 2, "unit_price": 725.00 }],
+  "metadata": { "branch_id": "branch_02" }
+}
