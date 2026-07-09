@@ -659,7 +659,7 @@ async transition(orderId: string, to: OrderStatus) {
 }
 ```
 
-**Known gap, deliberately deferred:** the DB save and Kafka publish above are two separate operations — a crash between them produces a status change with no event. The production-grade fix is a **transactional outbox pattern** (write the event to an `outbox` table in the same DB transaction as the status update; a separate poller reads the outbox and publishes it). Scoped as a **Phase 6 stretch goal** rather than a Phase 1 blocker — strong interview topic, not worth gating early progress on.
+**Known gap, resolved in Section 17 — this note previously said "Phase 6 stretch goal," which contradicted Section 17/20 and went uncaught until Phase 1 implementation surfaced it:** the DB save and Kafka publish above are two separate operations — a crash between them produces a status change with no event. The fix is the **transactional outbox pattern** in Section 17, generalized to cover the RabbitMQ `reserve_stock` publish too. **It belongs at the start of Phase 2**, not Phase 6 — Section 20's end-to-end trace has the outbox firing at order placement, which is a Phase 2 concern (RabbitMQ integration), not a later stretch goal. The plain `transition()` shown just above is correct *only* for Phase 1, where no messaging exists yet and there's nothing to write to an outbox — Phase 2 should replace it with the transactional version from Section 17, not layer the outbox on top later.
 
 ---
 
@@ -1125,6 +1125,14 @@ export class OutboxPollerService {
 ```
 
 **Documented tradeoff, not an oversight:** this gives **at-least-once** delivery, not exactly-once, on both channels. A crash between publishing and marking `published_at` republishes that message on the next poll. Every consumer (Analytics, Fraud, Audit, Inventory) must therefore be **idempotent** — see Section 19.
+
+**Concurrency — flagged during Phase 1, addressed here since this is the natural point to fix it.** Phase 1's plain `transition()` does read-then-write with no row locking or optimistic-concurrency column — two concurrent requests moving the same order forward (e.g. a duplicate payment-confirmation webhook retry racing the original) could silently clobber each other. Since Phase 2 already wraps `transition()`/`placeOrder()` in a DB transaction for the outbox insert, add `SELECT ... FOR UPDATE` (row lock) on the order row within that same transaction — no separate mechanism needed, it rides along with the refactor that's happening anyway:
+```typescript
+const order = await manager.findOneOrFail(Order, {
+  where: { id: orderId },
+  lock: { mode: 'pessimistic_write' },  // SELECT ... FOR UPDATE
+});
+```
 
 ---
 
