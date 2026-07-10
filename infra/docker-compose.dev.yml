@@ -1,0 +1,71 @@
+# Local dev — app services (Section 22), extending infra/docker-compose.yml.
+#
+# Deviates from Section 22's literal snippet in two ways, both required to
+# actually work rather than fail on first build/boot:
+#
+# 1. build.context is the monorepo root (".."), not each service's own
+#    directory. Every app service depends on @logistics/contracts as an npm
+#    workspace sibling, and Docker cannot COPY files from outside its build
+#    context — a per-service context can never see packages/contracts.
+# 2. The bind mount targets /repo/apps/<service> (matching where the image
+#    puts that service inside the full monorepo checkout), not /app. This
+#    means the root-level node_modules (containing the @logistics/contracts
+#    workspace symlink, built once at image-build time) sits outside the
+#    bind-mounted path and is never shadowed — no separate node_modules
+#    volume trick needed.
+#
+# depends_on uses `condition: service_healthy` (Section 8.3's fix, applied
+# here as noted at the time) rather than a bare list, and
+# `condition: service_completed_successfully` for kafka-init specifically,
+# since it's a one-shot job meant to exit, not stay up.
+
+services:
+  order-api:
+    build:
+      context: ..
+      dockerfile: apps/order-api/Dockerfile.dev
+    volumes:
+      - ../apps/order-api:/repo/apps/order-api
+    environment:
+      DATABASE_URL: postgres://order_api_app:change_me@postgres:5432/postgres
+      MIGRATION_DATABASE_URL: postgres://order_api_migrator:change_me@postgres:5432/postgres
+      RABBITMQ_URL: amqp://rabbitmq:5672
+      KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+      PORT: 3000
+    ports: ["3000:3000"]
+    networks: [logistics-net]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      kafka-1: { condition: service_healthy }
+      kafka-2: { condition: service_healthy }
+      kafka-3: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  inventory-service:
+    build:
+      context: ..
+      dockerfile: apps/inventory-service/Dockerfile.dev
+    volumes:
+      - ../apps/inventory-service:/repo/apps/inventory-service
+    environment:
+      RABBITMQ_URL: amqp://rabbitmq:5672
+      PORT: 3000
+    ports: ["3001:3000"]
+    networks: [logistics-net]
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+
+  notification-service:
+    build:
+      context: ..
+      dockerfile: apps/notification-service/Dockerfile.dev
+    volumes:
+      - ../apps/notification-service:/repo/apps/notification-service
+    environment:
+      RABBITMQ_URL: amqp://rabbitmq:5672
+      PORT: 3000
+    ports: ["3002:3000"]
+    networks: [logistics-net]
+    depends_on:
+      rabbitmq: { condition: service_healthy }

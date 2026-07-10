@@ -44,6 +44,13 @@ export class Order {
   @Column({ name: 'total_value', type: 'numeric', precision: 10, scale: 2 })
   totalValue: string;
 
+  // Not in Section 13's original DDL — added here because trace_id must be
+  // generated once at placement and reused on every later transition's
+  // outbox event (CLAUDE.md convention); it has to live somewhere durable
+  // to be re-read across separate requests, so it becomes a real column.
+  @Column({ name: 'trace_id', type: 'uuid', default: () => 'gen_random_uuid()' })
+  traceId: string;
+
   @OneToMany(() => OrderItem, (item) => item.order, { cascade: true })
   items: OrderItem[];
 

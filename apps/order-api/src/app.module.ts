@@ -3,6 +3,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { validateEnv } from './common/config/env.validation';
 import { entities } from './database/entities';
+import { JobsModule } from './jobs/jobs.module';
+import { MessagingModule } from './messaging/messaging.module';
 import { OrdersModule } from './orders/orders.module';
 
 @Module({
@@ -22,7 +24,9 @@ import { OrdersModule } from './orders/orders.module';
         migrationsRun: false,
       }),
     }),
+    MessagingModule,
     OrdersModule,
+    JobsModule,
   ],
 })
 export class AppModule {}

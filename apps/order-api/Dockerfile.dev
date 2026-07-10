@@ -1,0 +1,23 @@
+# Dev-mode only (Section 22) — bind-mounted source, not a production build.
+#
+# Build context must be the monorepo root, not this directory: order-api
+# depends on @logistics/contracts as an npm workspace sibling, and Docker
+# can't COPY files from outside its build context. See docker-compose.dev.yml.
+FROM node:20-alpine
+
+WORKDIR /repo
+
+COPY package.json package-lock.json ./
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY apps/order-api/package.json apps/order-api/package.json
+
+RUN npm install
+
+COPY packages/contracts packages/contracts
+COPY apps/order-api apps/order-api
+
+RUN npm run build --workspace=@logistics/contracts
+
+WORKDIR /repo/apps/order-api
+
+CMD ["npm", "run", "start:dev"]
