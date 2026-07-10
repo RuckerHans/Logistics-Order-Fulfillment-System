@@ -190,7 +190,8 @@ If two services accidentally share a group ID, Kafka treats them as one logical 
 - **Queue:** `inventory.reserve_stock`, **durable: true**, messages published with **persistent delivery mode** (`deliveryMode: 2`) — without this, a broker restart silently drops in-flight messages
 - **Retry policy:** 3 attempts, exponential backoff (1s/5s/15s) via a retry queue with per-message TTL and dead-letter-back-to-original-queue pattern; after 3 failed attempts, routed to the DLQ below
 - **Dead-letter queue:** `inventory.reserve_stock.failed`
-- **Reply queue:** `order-api.stock-reservation-results` — Inventory Service publishes `StockReservationResult` here; Order API consumes it to decide the next transition
+- **Reply queue:** `order-api.stock-reservation-results`, **durable: true**, persistent delivery mode — Inventory Service publishes `StockReservationResult` here; Order API consumes it to decide the next transition
+- **Reply queue retry policy (added — this queue previously had no retry/DLX topology at all, a real gap found during Phase 2's business-logic implementation):** same 3-attempt exponential backoff (1s/5s/15s) as `inventory.reserve_stock` above, dead-lettering to `order-api.stock-reservation-results.failed` after 3 attempts. Without this, a persistently-failing reply (not malformed, not "order not found," some other transient error) would nack-and-requeue indefinitely with no backoff, hammering Postgres on every redelivery. The distinction that still matters: `InvalidTransitionException` (a redelivered result arriving after the order already moved on) is a **safe no-op**, not a failure — it should `ack` immediately, never entering the retry path at all. Only genuine transient errors (DB connection drop, etc.) should trigger nack-and-retry.
 - **Producer:** Order API → **Consumer:** Inventory Service
 
 ```typescript
