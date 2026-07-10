@@ -1,5 +1,5 @@
 export function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
-  const required = ['DATABASE_URL', 'RABBITMQ_URL', 'KAFKA_BROKERS'];
+  const required = ['DATABASE_URL', 'REDIS_URL', 'RABBITMQ_URL', 'KAFKA_BROKERS'];
   const missing = required.filter((key) => !config[key]);
 
   if (missing.length > 0) {

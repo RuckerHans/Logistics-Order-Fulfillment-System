@@ -236,7 +236,7 @@ export interface GenerateInvoiceJob { traceId: string; orderId: string; }
 ```
 
 - `payment-timeout` — delayed 15 min from `PLACED`; if not `PAYMENT_CONFIRMED` by then, cancel order + emit stock release
-- `delivery-reminder` — scheduled for `estimatedDelivery - 1hr`, enqueued on `SHIPPED`
+- `delivery-reminder` — scheduled for `estimatedDelivery - 1hr`, enqueued on `SHIPPED`. **Resolved during Phase 3 — this spec never said where `estimatedDelivery` comes from, since no such field exists anywhere in the schema.** Phase 3 assumed a fixed 3-day delivery window from the moment `SHIPPED` fires (so the reminder delay is `71 hours`) — this is an invented default, not a derived spec value, and should be revisited if real delivery-estimation data is ever added (e.g. a carrier API, a per-branch shipping SLA).
 - `generate-invoice-pdf` — enqueued on `PAYMENT_CONFIRMED`, one-shot job
 
 ---

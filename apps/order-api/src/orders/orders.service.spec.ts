@@ -1,9 +1,15 @@
 import { NotFoundException } from '@nestjs/common';
+import { getQueueToken } from '@nestjs/bullmq';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { OrderStatus } from '@logistics/contracts';
 import { DataSource, Repository } from 'typeorm';
 import { OutboxEntry } from '../database/entities/outbox-entry.entity';
+import {
+  DELIVERY_REMINDER_QUEUE,
+  GENERATE_INVOICE_QUEUE,
+  PAYMENT_TIMEOUT_QUEUE,
+} from '../jobs/queue-names';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { InvalidTransitionException } from './exceptions/invalid-transition.exception';
@@ -21,6 +27,9 @@ describe('OrdersService', () => {
     find: jest.Mock;
   };
   let dataSource: { transaction: jest.Mock };
+  let paymentTimeoutQueue: { add: jest.Mock };
+  let deliveryReminderQueue: { add: jest.Mock };
+  let generateInvoiceQueue: { add: jest.Mock };
 
   const makeOrder = (overrides: Partial<Order> = {}): Order =>
     Object.assign(new Order(), {
@@ -56,6 +65,9 @@ describe('OrdersService', () => {
       ]),
     };
     dataSource = { transaction: jest.fn((cb) => cb(manager)) };
+    paymentTimeoutQueue = { add: jest.fn().mockResolvedValue(undefined) };
+    deliveryReminderQueue = { add: jest.fn().mockResolvedValue(undefined) };
+    generateInvoiceQueue = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -66,6 +78,9 @@ describe('OrdersService', () => {
           useValue: { find: jest.fn(), findOne: jest.fn() },
         },
         { provide: DataSource, useValue: dataSource },
+        { provide: getQueueToken(PAYMENT_TIMEOUT_QUEUE), useValue: paymentTimeoutQueue },
+        { provide: getQueueToken(DELIVERY_REMINDER_QUEUE), useValue: deliveryReminderQueue },
+        { provide: getQueueToken(GENERATE_INVOICE_QUEUE), useValue: generateInvoiceQueue },
       ],
     }).compile();
 
@@ -139,6 +154,16 @@ describe('OrdersService', () => {
       await service.placeOrder(dto);
       expect(manager.insert).toHaveBeenCalledTimes(3);
     });
+
+    it('enqueues a payment-timeout job delayed 15 minutes, after the transaction commits', async () => {
+      const order = await service.placeOrder(dto);
+
+      expect(paymentTimeoutQueue.add).toHaveBeenCalledWith(
+        PAYMENT_TIMEOUT_QUEUE,
+        { traceId: order.traceId, orderId: order.id },
+        { delay: 15 * 60 * 1000 },
+      );
+    });
   });
 
   describe('findOne', () => {
@@ -192,6 +217,45 @@ describe('OrdersService', () => {
       // Only the kafka status_changed row — PICKING isn't in NOTIFY's type enum.
       expect(manager.insert).toHaveBeenCalledTimes(1);
       expect(manager.insert.mock.calls[0][1].channel).toBe('kafka');
+    });
+
+    it('enqueues generate-invoice-pdf (no delay) on transition to PAYMENT_CONFIRMED', async () => {
+      manager.findOne.mockResolvedValue(makeOrder({ status: OrderStatus.PLACED }));
+
+      const order = await service.transition('order-1', OrderStatus.PAYMENT_CONFIRMED);
+
+      expect(generateInvoiceQueue.add).toHaveBeenCalledWith(GENERATE_INVOICE_QUEUE, {
+        traceId: order.traceId,
+        orderId: order.id,
+      });
+      expect(deliveryReminderQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('enqueues delivery-reminder (delayed) on transition to SHIPPED', async () => {
+      manager.findOne.mockResolvedValue(makeOrder({ status: OrderStatus.PACKED }));
+
+      const order = await service.transition('order-1', OrderStatus.SHIPPED);
+
+      expect(deliveryReminderQueue.add).toHaveBeenCalledWith(
+        DELIVERY_REMINDER_QUEUE,
+        { traceId: order.traceId, orderId: order.id, customerId: order.customerId },
+        { delay: expect.any(Number) },
+      );
+      // Documented assumption (3-day delivery window, minus 1hr) — sanity
+      // bound so a unit conversion typo doesn't silently slip through.
+      const delay = deliveryReminderQueue.add.mock.calls[0][2].delay;
+      expect(delay).toBeGreaterThan(23 * 60 * 60 * 1000); // more than 23h
+      expect(delay).toBeLessThan(3 * 24 * 60 * 60 * 1000); // less than 3 full days
+      expect(generateInvoiceQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('does not enqueue either delivery-reminder or generate-invoice-pdf for an unrelated transition (PICKING)', async () => {
+      manager.findOne.mockResolvedValue(makeOrder({ status: OrderStatus.PAYMENT_CONFIRMED }));
+
+      await service.transition('order-1', OrderStatus.PICKING);
+
+      expect(deliveryReminderQueue.add).not.toHaveBeenCalled();
+      expect(generateInvoiceQueue.add).not.toHaveBeenCalled();
     });
 
     it('rejects an invalid transition and does not persist or publish anything', async () => {

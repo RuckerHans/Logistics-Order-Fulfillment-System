@@ -29,6 +29,7 @@ services:
     environment:
       DATABASE_URL: postgres://order_api_app:change_me@postgres:5432/postgres
       MIGRATION_DATABASE_URL: postgres://order_api_migrator:change_me@postgres:5432/postgres
+      REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://rabbitmq:5672
       KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
       PORT: 3000
@@ -36,6 +37,7 @@ services:
     networks: [logistics-net]
     depends_on:
       postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       kafka-1: { condition: service_healthy }
       kafka-2: { condition: service_healthy }

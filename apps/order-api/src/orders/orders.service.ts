@@ -1,9 +1,21 @@
 import { randomUUID } from 'crypto';
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { NOTIFY, OrderStatus, RESERVE_STOCK } from '@logistics/contracts';
+import { Queue } from 'bullmq';
 import { DataSource, Repository } from 'typeorm';
 import { OutboxEntry } from '../database/entities/outbox-entry.entity';
+import {
+  DeliveryReminderJobData,
+  GenerateInvoiceJobData,
+  PaymentTimeoutJobData,
+} from '../jobs/job-payloads';
+import {
+  DELIVERY_REMINDER_QUEUE,
+  GENERATE_INVOICE_QUEUE,
+  PAYMENT_TIMEOUT_QUEUE,
+} from '../jobs/queue-names';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
@@ -15,16 +27,29 @@ import {
   buildStatusChangedPayload,
 } from './outbox-payloads';
 
+const PAYMENT_TIMEOUT_MS = 15 * 60 * 1000; // 15 min from PLACED (Section 5.5)
+
+// No estimated-delivery field exists anywhere in the schema or DTO — Section
+// 5.5 defines the reminder as "estimatedDelivery - 1hr" but never says where
+// that timestamp comes from. Assuming a fixed 3-day delivery window from the
+// moment SHIPPED fires, documented here since it's a real assumption, not a
+// spec value.
+const ASSUMED_DELIVERY_DAYS = 3;
+const DELIVERY_REMINDER_DELAY_MS = ASSUMED_DELIVERY_DAYS * 24 * 60 * 60 * 1000 - 60 * 60 * 1000;
+
 @Injectable()
 export class OrdersService {
   constructor(
     @InjectRepository(Order) private readonly ordersRepo: Repository<Order>,
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly stateMachine: OrderStateMachine,
+    @InjectQueue(PAYMENT_TIMEOUT_QUEUE) private readonly paymentTimeoutQueue: Queue<PaymentTimeoutJobData>,
+    @InjectQueue(DELIVERY_REMINDER_QUEUE) private readonly deliveryReminderQueue: Queue<DeliveryReminderJobData>,
+    @InjectQueue(GENERATE_INVOICE_QUEUE) private readonly generateInvoiceQueue: Queue<GenerateInvoiceJobData>,
   ) {}
 
   async placeOrder(dto: CreateOrderDto): Promise<Order> {
-    return this.dataSource.transaction(async (manager) => {
+    const order = await this.dataSource.transaction(async (manager) => {
       const totalValue = dto.items
         .reduce((sum, item) => sum + item.qty * item.unitPrice, 0)
         .toFixed(2);
@@ -79,6 +104,19 @@ export class OrdersService {
 
       return order;
     });
+
+    // Enqueued after the transaction commits — a job for an order that
+    // never made it into Postgres would be worse than one that's a few
+    // milliseconds late; BullMQ is internal-only (Section 5.5), not part of
+    // the cross-service outbox pattern, so a direct call here (not another
+    // outbox row) matches its own scope.
+    await this.paymentTimeoutQueue.add(
+      PAYMENT_TIMEOUT_QUEUE,
+      { traceId: order.traceId, orderId: order.id },
+      { delay: PAYMENT_TIMEOUT_MS },
+    );
+
+    return order;
   }
 
   findAll(): Promise<Order[]> {
@@ -94,7 +132,7 @@ export class OrdersService {
   }
 
   async transition(id: string, to: OrderStatus): Promise<Order> {
-    return this.dataSource.transaction(async (manager) => {
+    const order = await this.dataSource.transaction(async (manager) => {
       // SELECT ... FOR UPDATE — two concurrent requests moving the same
       // order forward (e.g. a duplicate webhook retry) can no longer race;
       // the second waits for the first transaction to commit or roll back.
@@ -145,5 +183,25 @@ export class OrdersService {
 
       return order;
     });
+
+    // Same reasoning as placeOrder(): enqueued after the transaction
+    // commits, not inside it — BullMQ is internal-only (Section 5.5), so a
+    // direct call here rather than another outbox row.
+    if (to === OrderStatus.SHIPPED) {
+      await this.deliveryReminderQueue.add(
+        DELIVERY_REMINDER_QUEUE,
+        { traceId: order.traceId, orderId: order.id, customerId: order.customerId },
+        { delay: DELIVERY_REMINDER_DELAY_MS },
+      );
+    }
+
+    if (to === OrderStatus.PAYMENT_CONFIRMED) {
+      await this.generateInvoiceQueue.add(GENERATE_INVOICE_QUEUE, {
+        traceId: order.traceId,
+        orderId: order.id,
+      });
+    }
+
+    return order;
   }
 }
