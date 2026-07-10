@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { ListOrdersDto } from './dto/list-orders.dto';
 import { TransitionOrderDto } from './dto/transition-order.dto';
 import { OrdersService } from './orders.service';
 
@@ -13,8 +14,8 @@ export class OrdersController {
   }
 
   @Get()
-  findAll() {
-    return this.ordersService.findAll();
+  findAll(@Query() query: ListOrdersDto) {
+    return this.ordersService.findAll(query.page, query.limit);
   }
 
   @Get(':id')

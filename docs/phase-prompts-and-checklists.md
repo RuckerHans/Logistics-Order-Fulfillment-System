@@ -76,7 +76,9 @@ the job was scheduled.
 
 ---
 
-## Phase 4 — Kafka: outbox already exists, this phase is the four consumers
+## Phase 4 — Kafka: outbox already exists, this phase is the four consumers — DONE, committed
+
+Reference only. Real bugs found: `fraud.order_events`'s Kafka consumer task died silently ~1.5s after startup (DB insert failed pre-migration, `asyncio.create_task` swallowed the exception, zero log evidence) — fixed with a supervisor loop plus `enable_auto_commit=False`/manual commit, since default auto-commit is at-most-once and could silently lose a message rather than merely redeliver one. Also found: Section 19.1 prescribed a `new_status` column on `fraud.order_events` that Section 13's DDL never gave it — corrected to `UNIQUE (order_id)` alone.
 
 **Prompt:**
 ```
@@ -124,14 +126,31 @@ target state (COMMITTED/RELEASED), per Section 19.1.
 
 **Prompt:**
 ```
-Build the Next.js dashboard (Section 9, Phase 5): order placement form, live
-order status view, analytics charts, fraud flags view. Standard build/review
-tradeoffs apply less here — this is UI, delegate freely.
+Before building any UI, confirm/add the read endpoints the dashboard needs:
+
+- Analytics Service currently has no REST API at all (Section 3 only specified
+  it as a Kafka consumer) — add a minimal read endpoint (e.g. GET /stats or
+  similar) exposing whatever aggregates order_status_events supports:
+  orders-per-hour, average time-in-status, etc. This is new backend surface,
+  not frontend work — flag it as such and treat it with the same scrutiny as
+  any other new endpoint, not as an afterthought to the UI.
+- Confirm whether Order API already has a GET /orders (list) endpoint — every
+  test so far has only exercised single-order lookups by ID. If it doesn't
+  exist, add it with reasonable pagination.
+- Fraud Service's GET /flags and GET /flags/{order_id} (Section 6) already
+  exist and are ready to consume as-is.
+
+Once those are confirmed/added, build the Next.js dashboard (Section 9, Phase 5):
+order placement form, live order status view (using the list endpoint above),
+analytics charts (using the new analytics endpoint), fraud flags view. Standard
+build/review tradeoffs apply less to the UI itself — delegate that freely.
 ```
 
 **Review checklist:**
+- Confirm the new Analytics read endpoint uses `analytics_app` for its queries, not a broader role — a new endpoint is a new place for the migrator/app role split to accidentally get bypassed.
+- Does the order placement form actually trigger the full backend chain (outbox → RabbitMQ → reservation → reply → notification), or does it only prove the `POST /orders` response looks right?
+- Does the fraud flags view correctly render an empty state for orders with no flags, rather than treating "no data" as an error (or vice versa)?
 - Does placing an order through the UI actually trigger the full backend chain verified in Phases 2-4, end to end?
-- Does the fraud flags view correctly show nothing for orders that never triggered a rule (not a rendering bug hiding an empty state as an error, or vice versa)?
 
 ---
 

@@ -17,6 +17,7 @@ import {
   PAYMENT_TIMEOUT_QUEUE,
 } from '../jobs/queue-names';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { PaginatedOrders } from './dto/paginated-orders.dto';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { InvalidTransitionException } from './exceptions/invalid-transition.exception';
@@ -119,8 +120,18 @@ export class OrdersService {
     return order;
   }
 
-  findAll(): Promise<Order[]> {
-    return this.ordersRepo.find({ relations: ['items'] });
+  // Previously unbounded (`find()` with no limit) and never exercised by
+  // anything — a real fleet of orders would return the entire table on
+  // every dashboard poll. Paginated, newest first.
+  async findAll(page: number, limit: number): Promise<PaginatedOrders> {
+    const [data, total] = await this.ordersRepo.findAndCount({
+      relations: ['items'],
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) || 1 };
   }
 
   async findOne(id: string): Promise<Order> {

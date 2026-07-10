@@ -1,0 +1,21 @@
+# Dev-mode only (Section 22) — bind-mounted source, not a production build.
+#
+# Build context is the monorepo root, matching every other service's
+# Dockerfile.dev, for consistency with the npm workspaces setup — even
+# though apps/web has no cross-workspace dependency (deliberately kept
+# decoupled from packages/contracts), root-level `npm install` is still
+# what makes the workspace's lockfile entry resolve correctly.
+FROM node:20-alpine
+
+WORKDIR /repo
+
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/package.json
+
+RUN npm install
+
+COPY apps/web apps/web
+
+WORKDIR /repo/apps/web
+
+CMD ["npm", "run", "dev"]

@@ -75,7 +75,7 @@ describe('OrdersService', () => {
         OrderStateMachine,
         {
           provide: getRepositoryToken(Order),
-          useValue: { find: jest.fn(), findOne: jest.fn() },
+          useValue: { find: jest.fn(), findOne: jest.fn(), findAndCount: jest.fn() },
         },
         { provide: DataSource, useValue: dataSource },
         { provide: getQueueToken(PAYMENT_TIMEOUT_QUEUE), useValue: paymentTimeoutQueue },
@@ -170,6 +170,32 @@ describe('OrdersService', () => {
     it('throws NotFoundException when the order does not exist', async () => {
       ordersRepo.findOne.mockResolvedValue(null);
       await expect(service.findOne('missing')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('findAll', () => {
+    it('paginates: passes the right skip/take and returns total/totalPages', async () => {
+      const orders = [makeOrder({ id: 'order-1' }), makeOrder({ id: 'order-2' })];
+      (ordersRepo as any).findAndCount.mockResolvedValue([orders, 45]);
+
+      const result = await service.findAll(2, 20);
+
+      expect((ordersRepo as any).findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          skip: 20, // (page 2 - 1) * limit 20
+          take: 20,
+          order: { createdAt: 'DESC' },
+        }),
+      );
+      expect(result).toEqual({ data: orders, total: 45, page: 2, limit: 20, totalPages: 3 });
+    });
+
+    it('does not blow up on an empty table (totalPages defaults to 1, not 0)', async () => {
+      (ordersRepo as any).findAndCount.mockResolvedValue([[], 0]);
+
+      const result = await service.findAll(1, 20);
+
+      expect(result).toEqual({ data: [], total: 0, page: 1, limit: 20, totalPages: 1 });
     });
   });
 

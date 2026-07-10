@@ -141,3 +141,22 @@ services:
       kafka-2: { condition: service_healthy }
       kafka-3: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile.dev
+    volumes:
+      - ../apps/web:/repo/apps/web
+    environment:
+      # Container-network hostnames + internal container ports (not the
+      # host-mapped ports above) — this is server-side fetch from Next.js's
+      # own Node process, not the browser, so these never need to resolve
+      # outside logistics-net.
+      ORDER_API_URL: http://order-api:3000
+      ANALYTICS_API_URL: http://analytics-service:3000
+      FRAUD_API_URL: http://fraud-service:8000
+      PORT: 3000
+    ports: ["3100:3000"]
+    networks: [logistics-net]
+    depends_on: [order-api, analytics-service, fraud-service]
