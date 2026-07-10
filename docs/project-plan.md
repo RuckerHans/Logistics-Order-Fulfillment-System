@@ -269,6 +269,10 @@ apps/fraud-service/
 
 **Rule engine design:** rules implement a `FraudRule` Protocol (`evaluate(event) -> RuleResult | None`), aggregated by a simple `RuleEngine.run()`. Adding a new rule — or later upgrading to a real anomaly-detection model (isolation forest, z-score) — means adding one class, not touching existing logic.
 
+**Consumer resilience — added during Phase 4, closing a real silent-failure gap in this section's original design.** The lifespan-managed consumer task (`main.py`'s `asyncio.create_task(consume())`) has a specific failure mode this section didn't originally account for: if the consumer coroutine raises and dies, `asyncio.create_task` swallows the exception silently — the FastAPI app keeps serving HTTP requests normally, with zero log evidence that the consumer is dead. This actually happened during Phase 4 (a DB insert failed because the Alembic migration hadn't run yet, killing the consumer 1.5s after startup with no visible trace). Two fixes, both necessary:
+1. **A supervisor loop**, not a bare `create_task`: catch, log the full traceback, and restart the consumer with backoff, rather than letting it die invisibly.
+2. **`enable_auto_commit=False` with a manual commit after each successfully handled message** — aiokafka's default auto-commit fires on a fixed timer (every 5s) regardless of whether the handler actually succeeded, which is **at-most-once** delivery, not the at-least-once semantics the idempotent dedup logic in Section 19.1 is designed around. Auto-commit could silently *lose* a message (offset advances before the DB write happens) rather than merely redeliver one — a worse failure mode than duplication, and the opposite of what this design assumes.
+
 **Rules v1:**
 1. **Velocity rule** — 3+ orders to the same delivery address within 10 minutes → flag (medium severity)
 2. **Value anomaly rule** — order value exceeds 3x the customer's historical average → flag (high severity)
@@ -1167,11 +1171,17 @@ Every Kafka consumer dedupes on `(order_id, new_status)` — safe because the st
 ```sql
 ALTER TABLE audit.order_status_log ADD CONSTRAINT uq_audit_order_status UNIQUE (order_id, new_status);
 ALTER TABLE analytics.order_status_events ADD CONSTRAINT uq_analytics_order_status UNIQUE (order_id, new_status);
-ALTER TABLE fraud.order_events ADD CONSTRAINT uq_fraud_order_status UNIQUE (order_id, new_status);
 ```
 
+**`fraud.order_events` is the one exception — found during Phase 4, this constraint as originally written here doesn't apply.** `fraud.order_events` (Section 13) has no `new_status` column at all — Fraud Service only ever persists `PLACED` events (per Section 6's `RELEVANT_STATUSES` scoping), so there's nothing to distinguish by status in the first place. The correct dedup key is `UNIQUE (order_id)` alone:
+```sql
+ALTER TABLE fraud.order_events ADD CONSTRAINT uq_fraud_order UNIQUE (order_id);
+ALTER TABLE fraud.flagged_orders ADD CONSTRAINT uq_fraud_flagged UNIQUE (order_id, rule_name);
+```
+**Caveat worth remembering if Fraud's rule set ever expands beyond placement-time rules** (e.g. a future "cancelled-then-reordered" pattern reacting to a second status): `UNIQUE (order_id)` assumes exactly one persisted row per order, which breaks the moment `RELEVANT_STATUSES` grows past `{PLACED}`. Revisit this constraint together with any such change, not independently.
+
 ```typescript
-// consumer insert pattern, all three services
+// consumer insert pattern, analytics/audit
 await repo.insert(entity).onConflict(['order_id', 'new_status']).ignore();
 ```
 
