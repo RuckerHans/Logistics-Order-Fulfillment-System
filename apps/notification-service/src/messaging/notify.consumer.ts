@@ -24,8 +24,17 @@ export class NotifyConsumer implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    // assertQueue here too, even though RabbitMQModule's own setup already
+    // does it: amqp-connection-manager runs every registered setup function
+    // concurrently (Promise.all), not in registration order, so this
+    // addSetup callback can't rely on that other setup having finished
+    // first. Against a fresh vhost with no pre-existing queue, consume()
+    // would otherwise race assertQueue() and fail with 404 NOT_FOUND —
+    // assertQueue is idempotent, so asserting again here is free.
     await this.channel.addSetup((channel: ConfirmChannel) =>
-      channel.consume(NOTIFY.queue, (msg) => this.handle(channel, msg)),
+      channel
+        .assertQueue(NOTIFY.queue, { durable: true })
+        .then(() => channel.consume(NOTIFY.queue, (msg) => this.handle(channel, msg))),
     );
   }
 

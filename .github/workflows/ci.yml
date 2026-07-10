@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  test-node-services:
+    strategy:
+      matrix:
+        service:
+          - order-api
+          - inventory-service
+          - notification-service
+          - analytics-service
+          - audit-service
+          - web
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: testpass }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready" --health-interval=5s --health-timeout=5s --health-retries=5
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+      rabbitmq:
+        image: rabbitmq:3.13-management
+        ports: ["5672:5672"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm' }
+      - run: npm ci
+      - run: npm run build --workspace=packages/contracts
+      - run: npm run lint --workspace=apps/${{ matrix.service }}
+      - run: npm run test --workspace=apps/${{ matrix.service }}
+
+  test-fraud-service:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/fraud-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install -r requirements.txt
+      - run: pip install pytest pytest-asyncio pytest-mock
+      - run: pytest
+
+  # Section 19.3 — validates the same canonical JSON fixtures against both
+  # the zod schema (TS) and the Pydantic model (Python). Only order.status_changed
+  # crosses the NestJS/FastAPI boundary; the RabbitMQ contracts are
+  # NestJS-to-NestJS only, so there's no cross-language drift risk to test there.
+  contract-drift-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm' }
+      - run: npm ci
+      - run: npm run test --workspace=packages/contracts
+
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install -r apps/fraud-service/requirements.txt pytest
+      - run: pytest apps/fraud-service/tests/test_contract_order_status_changed.py
+
+  build-docker-images:
+    needs: [test-node-services, test-fraud-service, contract-drift-test]
+    strategy:
+      matrix:
+        service:
+          - order-api
+          - inventory-service
+          - notification-service
+          - analytics-service
+          - audit-service
+          - fraud-service
+          - web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Context MUST be the repo root, not ./apps/<service>: every service's
+      # Dockerfile.dev COPYs packages/contracts as an npm workspace sibling
+      # (fraud-service also copies the contract-drift fixtures), which a
+      # per-service context can't see. -f points at the dev Dockerfile since
+      # there's no plain "Dockerfile" anywhere in this repo. Confirmed by
+      # actually running the naive `docker build ./apps/<service>` locally
+      # first — it fails immediately ("open Dockerfile: no such file or
+      # directory") — before writing this corrected version.
+      - run: docker build -f apps/${{ matrix.service }}/Dockerfile.dev -t logistics/${{ matrix.service }}:ci .

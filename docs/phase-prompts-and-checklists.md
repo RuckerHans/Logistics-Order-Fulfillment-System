@@ -122,35 +122,9 @@ target state (COMMITTED/RELEASED), per Section 19.1.
 
 ---
 
-## Phase 5 — Frontend
+## Phase 5 — Frontend — DONE, committed
 
-**Prompt:**
-```
-Before building any UI, confirm/add the read endpoints the dashboard needs:
-
-- Analytics Service currently has no REST API at all (Section 3 only specified
-  it as a Kafka consumer) — add a minimal read endpoint (e.g. GET /stats or
-  similar) exposing whatever aggregates order_status_events supports:
-  orders-per-hour, average time-in-status, etc. This is new backend surface,
-  not frontend work — flag it as such and treat it with the same scrutiny as
-  any other new endpoint, not as an afterthought to the UI.
-- Confirm whether Order API already has a GET /orders (list) endpoint — every
-  test so far has only exercised single-order lookups by ID. If it doesn't
-  exist, add it with reasonable pagination.
-- Fraud Service's GET /flags and GET /flags/{order_id} (Section 6) already
-  exist and are ready to consume as-is.
-
-Once those are confirmed/added, build the Next.js dashboard (Section 9, Phase 5):
-order placement form, live order status view (using the list endpoint above),
-analytics charts (using the new analytics endpoint), fraud flags view. Standard
-build/review tradeoffs apply less to the UI itself — delegate that freely.
-```
-
-**Review checklist:**
-- Confirm the new Analytics read endpoint uses `analytics_app` for its queries, not a broader role — a new endpoint is a new place for the migrator/app role split to accidentally get bypassed.
-- Does the order placement form actually trigger the full backend chain (outbox → RabbitMQ → reservation → reply → notification), or does it only prove the `POST /orders` response looks right?
-- Does the fraud flags view correctly render an empty state for orders with no flags, rather than treating "no data" as an error (or vice versa)?
-- Does placing an order through the UI actually trigger the full backend chain verified in Phases 2-4, end to end?
+Reference only. Real bugs found: `GET /orders` existed since Phase 1 but had zero pagination and zero test coverage; Analytics Service's actual REST API status contradicted an earlier claim (flagged rather than silently resolved either way); stale 274MB `.next/` bloating the Docker build context; port-convention mismatch (hardcoded `3100` instead of respecting `$PORT`); container-hostname vs. `localhost` mismatch in the subagent's own sandboxed verification, caught and fixed by the human review pass specifically because that's the one thing a sandboxed build can't check.
 
 ---
 
@@ -158,14 +132,39 @@ build/review tradeoffs apply less to the UI itself — delegate that freely.
 
 **Prompt:**
 ```
-Wire the full CI pipeline (Sections 16, 18, 19.3) including contract-drift-test
-in build-docker-images' needs: list — confirm this literally, don't just state
-it (this exact gap slipped through once already in the plan doc itself). Write
-the README with the "why RabbitMQ / Kafka / BullMQ" rationale section covering
-what's actually true of this implementation, not just the original plan's intent.
+Wire the full CI pipeline (Sections 16, 18, 19.3):
+
+- Add web to build-docker-images' matrix — it's missing entirely from Section 16,
+  since that section predates Phase 5. Confirm whether web has a real test script
+  (tsc + eslint at minimum) before adding it to test-node-services too — if it
+  doesn't have one yet, add a minimal one rather than either skipping it from CI
+  or letting the matrix job fail on a missing script.
+- Confirm analytics-service and audit-service's --passWithNoTests handling lives
+  in each service's own package.json test script, not as a CI-only override —
+  otherwise the generic per-service test command in the matrix breaks for them.
+- Add contract-drift-test to build-docker-images' needs: list — confirm this
+  literally by reading the actual YAML, don't just state it. This exact gap
+  (the fix described in prose without the YAML actually reflecting it) slipped
+  through once already in the plan doc itself.
+
+Before writing the README, bring up the ENTIRE stack in one shot — all infra
+plus all 7 backend services plus web — from a fresh `down -v`. Every phase so
+far has only brought up the subset it needed; this is the first time everything
+runs together, and it's worth finding out now if anything about that combination
+doesn't hold up.
+
+Write the README with the "why RabbitMQ / Kafka / BullMQ" rationale section,
+covering what's actually true of this implementation (including the testing
+philosophy — why analytics/audit have no dedicated unit tests, the migrator/app
+role split, the outbox pattern) — not just the original plan's intent. Also
+explicitly address the deferred AWS/Terraform question: state plainly that this
+project is local-only and why, rather than leaving it unmentioned.
 ```
 
 **Review checklist:**
-- Deliberately break something the contract-drift test should catch (remove a Pydantic constraint) and push a PR — does CI actually go red, and does that red block `build-docker-images`? Open the actual YAML and read the `needs:` list yourself rather than trusting a summary that says it's wired.
+- Read the actual `needs:` list in the committed YAML yourself — don't accept a summary that says it's wired.
+- Confirm `web` is genuinely in `build-docker-images`, and that whatever test script it has (if any) actually runs and passes in CI, not just locally.
+- Deliberately break something the contract-drift test should catch (remove a Pydantic constraint) and push it — does CI actually go red, and does that red block the build?
+- The full-stack `down -v && up` — did it actually succeed with zero manual intervention, or did something need a restart/reorder that should be reflected in a healthcheck/`depends_on` fix rather than papered over?
 - Read the README's rationale section yourself — could you defend every sentence in an interview without looking anything up? If a sentence describes something that isn't quite how it ended up being built (the outbox timing, the reply queue's retry policy, the two-tier role model), fix the README, don't leave the aspirational version in.
-- Decide, explicitly, on the deferred AWS/Terraform question — this has been open since the planning phase; Phase 6 is the natural point to either close it or explicitly declare the project local-only in the README.
+- Confirm the AWS/Terraform decision is explicitly stated in the README, not silently absent.

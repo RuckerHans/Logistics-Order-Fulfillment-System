@@ -133,6 +133,15 @@ services:
       DATABASE_URL: postgresql+asyncpg://fraud_app:change_me@postgres:5432/postgres
       MIGRATION_DATABASE_URL: postgresql+psycopg2://fraud_migrator:change_me@postgres:5432/postgres
       KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+      # uvicorn --reload's default inotify-based watcher (via the `watchfiles`
+      # Rust extension) crashes with "Cannot allocate memory" once the full
+      # stack is up: 5 NestJS services running `nest start --watch` plus
+      # Next.js's Turbopack dev server already saturate the shared inotify
+      # watch/instance budget inside Docker Desktop's WSL2 VM. Forcing
+      # watchfiles to poll instead avoids competing for that same exhausted
+      # resource — confirmed by reproducing the crash with only 4 of the 8
+      # services running (this one included) and it recurring identically.
+      WATCHFILES_FORCE_POLLING: "true"
     ports: ["8005:8000"]
     networks: [logistics-net]
     depends_on:

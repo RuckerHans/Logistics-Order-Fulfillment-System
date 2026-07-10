@@ -25,8 +25,18 @@ export class ReplyQueueConsumer implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     // addSetup (not a one-off consume call): re-registers the consumer on
     // every reconnect too, not just the first connection.
+    //
+    // assertQueue here too, even though RabbitMQModule's own setup already
+    // does it: amqp-connection-manager runs every registered setup function
+    // concurrently (Promise.all), not in registration order, so this
+    // addSetup callback can't rely on that other setup having finished
+    // first. Against a fresh vhost with no pre-existing queue, consume()
+    // would otherwise race assertQueue() and fail with 404 NOT_FOUND —
+    // assertQueue is idempotent, so asserting again here is free.
     await this.channel.addSetup((channel: ConfirmChannel) =>
-      channel.consume(STOCK_RESERVATION_RESULTS.queue, (msg) => this.handle(channel, msg)),
+      channel
+        .assertQueue(STOCK_RESERVATION_RESULTS.queue, { durable: true })
+        .then(() => channel.consume(STOCK_RESERVATION_RESULTS.queue, (msg) => this.handle(channel, msg))),
     );
   }
 
