@@ -691,6 +691,7 @@ CREATE TABLE order_api.customers (
 CREATE TABLE order_api.orders (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   customer_id       UUID NOT NULL REFERENCES order_api.customers(id),
+  trace_id          UUID NOT NULL DEFAULT gen_random_uuid(),
   status            VARCHAR(20) NOT NULL DEFAULT 'PLACED'
                      CHECK (status IN ('PLACED','PAYMENT_CONFIRMED','PICKING',
                                         'PACKED','SHIPPED','DELIVERED','CANCELLED')),
@@ -700,6 +701,10 @@ CREATE TABLE order_api.orders (
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- trace_id added during Phase 2 implementation (missing from the original design):
+-- it's generated once at placement and must be reused on every later transition's
+-- event, which requires somewhere durable to read it back from — the order row
+-- itself is the natural place. Originally omitted from this table entirely.
 
 CREATE TABLE order_api.order_items (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1089,11 +1094,13 @@ async placeOrder(dto: CreateOrderDto) {
 }
 ```
 
-**Poller — one mechanism, branches on channel:**
+**Poller — one mechanism, branches on channel. Reentrancy guard added after Phase 2 implementation found `@Interval` overlapping ticks on a slow publish call (a hung Kafka connection made one tick take ~20s; overlapping ticks each re-published the same still-unpublished row — 47 duplicates from one order in practice). This was a gap in this reference snippet itself, not an implementation mistake:**
 ```typescript
 // jobs/outbox-poller.service.ts
 @Injectable()
 export class OutboxPollerService {
+  private isPolling = false;
+
   constructor(
     private dataSource: DataSource,
     private kafkaProducer: KafkaProducerService,
@@ -1102,25 +1109,33 @@ export class OutboxPollerService {
 
   @Interval(1000) // poll every second
   async pollAndPublish() {
-    const entries = await this.dataSource
-      .getRepository(OutboxEntry)
-      .find({ where: { publishedAt: IsNull() }, order: { createdAt: 'ASC' }, take: 50 });
+    if (this.isPolling) return; // previous tick still running — skip, don't overlap
+    this.isPolling = true;
+    try {
+      const entries = await this.dataSource
+        .getRepository(OutboxEntry)
+        .find({ where: { publishedAt: IsNull() }, order: { createdAt: 'ASC' }, take: 50 });
 
-    for (const entry of entries) {
-      try {
-        if (entry.channel === 'kafka') {
-          await this.kafkaProducer.publish(entry.routingKey, entry.payload);
-        } else {
-          await this.rabbitProducer.publish(entry.routingKey, entry.payload);
+      for (const entry of entries) {
+        try {
+          if (entry.channel === 'kafka') {
+            await this.kafkaProducer.publish(entry.routingKey, entry.payload);
+          } else {
+            await this.rabbitProducer.publish(entry.routingKey, entry.payload);
+          }
+          entry.publishedAt = new Date();
+          await this.dataSource.getRepository(OutboxEntry).save(entry);
+        } catch (err) {
+          // leave unpublished — retried on next poll
+          this.logger.error(`Failed to publish outbox entry ${entry.id}`, err);
         }
-        entry.publishedAt = new Date();
-        await this.dataSource.getRepository(OutboxEntry).save(entry);
-      } catch (err) {
-        // leave unpublished — retried on next poll
-        this.logger.error(`Failed to publish outbox entry ${entry.id}`, err);
       }
+    } finally {
+      this.isPolling = false;
     }
   }
+```
+**Known remaining limitation, not redesigned here:** entries within one tick are still processed in a single sequential `for` loop, so a slow/hung channel still delays the other channel's delivery within that tick — it just no longer duplicates across ticks. A self-scheduling loop (re-queue via `setTimeout` only after the previous run fully completes, rather than a fixed-interval + guard) would remove even that, but that's a larger redesign than this fix warrants right now.
 }
 ```
 
