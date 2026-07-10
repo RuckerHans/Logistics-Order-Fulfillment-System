@@ -24,3 +24,7 @@ implementing any phase.
 List 2-3 ways this implementation could fail silently (missing grant, unwired
 config, race condition) and state what you checked, not just that the happy
 path works.
+
+When editing packages/contracts: run `npm run build --workspace=@logistics/contracts`
+on the host, then `docker compose restart <service>` for anything that consumes it —
+not a full `docker compose build`, once the volume mount is in place.

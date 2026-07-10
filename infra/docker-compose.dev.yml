@@ -49,11 +49,14 @@ services:
     volumes:
       - ../apps/inventory-service:/repo/apps/inventory-service
     environment:
+      DATABASE_URL: postgres://inventory_app:change_me@postgres:5432/postgres
+      MIGRATION_DATABASE_URL: postgres://inventory_migrator:change_me@postgres:5432/postgres
       RABBITMQ_URL: amqp://rabbitmq:5672
       PORT: 3000
     ports: ["3001:3000"]
     networks: [logistics-net]
     depends_on:
+      postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
 
   notification-service:
@@ -63,9 +66,12 @@ services:
     volumes:
       - ../apps/notification-service:/repo/apps/notification-service
     environment:
+      DATABASE_URL: postgres://notification_app:change_me@postgres:5432/postgres
+      MIGRATION_DATABASE_URL: postgres://notification_migrator:change_me@postgres:5432/postgres
       RABBITMQ_URL: amqp://rabbitmq:5672
       PORT: 3000
     ports: ["3002:3000"]
     networks: [logistics-net]
     depends_on:
+      postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }

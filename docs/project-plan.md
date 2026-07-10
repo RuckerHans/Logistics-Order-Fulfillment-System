@@ -1386,10 +1386,22 @@ All services run in Docker for local dev, dev-tuned (bind-mounted source for hot
 
 ```yaml
 # docker-compose.dev.yml
+# NOTE — corrected during Phase 2, this block previously didn't match reality:
+# build.context was ./apps/<service> per service, which can't see @logistics/contracts
+# (a workspace sibling) — Docker can't COPY from outside its build context. The actual
+# fix, verified working in Phase 2: context is the repo root (one level up from this
+# file, in infra/), dockerfile path is relative to that root, and volumes mount the
+# individual source directories into /repo/apps/<service> and /repo/packages/contracts
+# — not /app, which was never a real path once Dockerfile.dev switched to WORKDIR /repo.
+# Confirmed in Phase 2: npm install runs once at /repo before either package's source
+# is copied in, so the npm workspace symlink (/repo/node_modules/@logistics/contracts)
+# is real, not accidental — verified via require.resolve() inside the running container.
 services:
   order-api:
-    build: { context: ./apps/order-api, dockerfile: Dockerfile.dev }
-    volumes: ["./apps/order-api:/app", "/app/node_modules"]
+    build: { context: .., dockerfile: apps/order-api/Dockerfile.dev }
+    volumes:
+      - ../apps/order-api:/repo/apps/order-api
+      - ../packages/contracts:/repo/packages/contracts
     environment:
       DATABASE_URL: postgres://order_api_app:change_me@postgres:5432/postgres
       MIGRATION_DATABASE_URL: postgres://order_api_migrator:change_me@postgres:5432/postgres
@@ -1398,11 +1410,20 @@ services:
       KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
     ports: ["3000:3000"]
     networks: [logistics-net]
-    depends_on: [postgres, redis, rabbitmq, kafka-1, kafka-2, kafka-3, kafka-init]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      kafka-1: { condition: service_healthy }
+      kafka-2: { condition: service_healthy }
+      kafka-3: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
 
   inventory-service:
-    build: { context: ./apps/inventory-service, dockerfile: Dockerfile.dev }
-    volumes: ["./apps/inventory-service:/app", "/app/node_modules"]
+    build: { context: .., dockerfile: apps/inventory-service/Dockerfile.dev }
+    volumes:
+      - ../apps/inventory-service:/repo/apps/inventory-service
+      - ../packages/contracts:/repo/packages/contracts
     environment:
       DATABASE_URL: postgres://inventory_app:change_me@postgres:5432/postgres
       MIGRATION_DATABASE_URL: postgres://inventory_migrator:change_me@postgres:5432/postgres
@@ -1410,42 +1431,68 @@ services:
       KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
     ports: ["3001:3000"]
     networks: [logistics-net]
-    depends_on: [postgres, rabbitmq, kafka-1, kafka-2, kafka-3, kafka-init]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      kafka-1: { condition: service_healthy }
+      kafka-2: { condition: service_healthy }
+      kafka-3: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
 
   notification-service:
-    build: { context: ./apps/notification-service, dockerfile: Dockerfile.dev }
-    volumes: ["./apps/notification-service:/app", "/app/node_modules"]
+    build: { context: .., dockerfile: apps/notification-service/Dockerfile.dev }
+    volumes:
+      - ../apps/notification-service:/repo/apps/notification-service
+      - ../packages/contracts:/repo/packages/contracts
     environment:
       DATABASE_URL: postgres://notification_app:change_me@postgres:5432/postgres
       MIGRATION_DATABASE_URL: postgres://notification_migrator:change_me@postgres:5432/postgres
       RABBITMQ_URL: amqp://rabbitmq:5672
     ports: ["3002:3000"]
     networks: [logistics-net]
-    depends_on: [postgres, rabbitmq]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
 
   analytics-service:
-    build: { context: ./apps/analytics-service, dockerfile: Dockerfile.dev }
-    volumes: ["./apps/analytics-service:/app", "/app/node_modules"]
+    build: { context: .., dockerfile: apps/analytics-service/Dockerfile.dev }
+    volumes:
+      - ../apps/analytics-service:/repo/apps/analytics-service
+      - ../packages/contracts:/repo/packages/contracts
     environment:
       DATABASE_URL: postgres://analytics_app:change_me@postgres:5432/postgres
       MIGRATION_DATABASE_URL: postgres://analytics_migrator:change_me@postgres:5432/postgres
       KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
     ports: ["3003:3000"]
     networks: [logistics-net]
-    depends_on: [postgres, kafka-1, kafka-2, kafka-3, kafka-init]
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-1: { condition: service_healthy }
+      kafka-2: { condition: service_healthy }
+      kafka-3: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
 
   audit-service:
-    build: { context: ./apps/audit-service, dockerfile: Dockerfile.dev }
-    volumes: ["./apps/audit-service:/app", "/app/node_modules"]
+    build: { context: .., dockerfile: apps/audit-service/Dockerfile.dev }
+    volumes:
+      - ../apps/audit-service:/repo/apps/audit-service
+      - ../packages/contracts:/repo/packages/contracts
     environment:
       DATABASE_URL: postgres://audit_app:change_me@postgres:5432/postgres
       MIGRATION_DATABASE_URL: postgres://audit_migrator:change_me@postgres:5432/postgres
       KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
     ports: ["3004:3000"]
     networks: [logistics-net]
-    depends_on: [postgres, kafka-1, kafka-2, kafka-3, kafka-init]
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-1: { condition: service_healthy }
+      kafka-2: { condition: service_healthy }
+      kafka-3: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
 
   fraud-service:
+    # Python — no npm workspace dependency, so the repo-root context requirement
+    # above doesn't apply here; this one's context is genuinely fine as its own dir.
     build: { context: ./apps/fraud-service, dockerfile: Dockerfile.dev }
     volumes: ["./apps/fraud-service:/app"]
     environment:
@@ -1454,11 +1501,18 @@ services:
       KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
     ports: ["8005:8000"]
     networks: [logistics-net]
-    depends_on: [postgres, kafka-1, kafka-2, kafka-3, kafka-init]
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-1: { condition: service_healthy }
+      kafka-2: { condition: service_healthy }
+      kafka-3: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
 
   web:
-    build: { context: ./apps/web, dockerfile: Dockerfile.dev }
-    volumes: ["./apps/web:/app", "/app/node_modules"]
+    build: { context: .., dockerfile: apps/web/Dockerfile.dev }
+    volumes:
+      - ../apps/web:/repo/apps/web
+      - ../packages/contracts:/repo/packages/contracts
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:3000
     ports: ["3100:3000"]

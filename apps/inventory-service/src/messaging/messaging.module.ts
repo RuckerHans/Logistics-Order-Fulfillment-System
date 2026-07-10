@@ -6,6 +6,10 @@ import { RabbitMQProducerService } from './rabbitmq-producer.service';
 @Module({
   imports: [RabbitMQModule],
   providers: [RabbitMQProducerService],
-  exports: [RabbitMQProducerService],
+  // RabbitMQModule must be re-exported too, not just RabbitMQProducerService
+  // — @Global() only makes a module's own `exports` reachable everywhere;
+  // importing RabbitMQModule here doesn't implicitly re-expose its
+  // RABBITMQ_CHANNEL token to the rest of the app.
+  exports: [RabbitMQModule, RabbitMQProducerService],
 })
 export class MessagingModule {}

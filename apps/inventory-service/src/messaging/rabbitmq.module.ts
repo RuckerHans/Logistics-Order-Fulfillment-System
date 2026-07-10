@@ -4,7 +4,7 @@ import {
   RABBITMQ_EXCHANGE,
   RESERVE_STOCK,
   RETRY_STAGES_MS,
-  STOCK_RESERVATION_RESULTS_QUEUE,
+  STOCK_RESERVATION_RESULTS,
 } from '@logistics/contracts';
 import * as amqp from 'amqp-connection-manager';
 import type { ChannelWrapper } from 'amqp-connection-manager';
@@ -55,7 +55,18 @@ export const RABBITMQ_CHANNEL = 'RABBITMQ_CHANNEL';
             // Asserted defensively here too (not just by Order API) so
             // publishing into it doesn't depend on Order API having started
             // first — assertQueue is idempotent.
-            await channel.assertQueue(STOCK_RESERVATION_RESULTS_QUEUE, { durable: true });
+            await channel.assertQueue(STOCK_RESERVATION_RESULTS.queue, { durable: true });
+            STOCK_RESERVATION_RESULTS.retryQueues.forEach((queueName, i) => {
+              channel.assertQueue(queueName, {
+                durable: true,
+                arguments: {
+                  'x-message-ttl': RETRY_STAGES_MS[i],
+                  'x-dead-letter-exchange': '',
+                  'x-dead-letter-routing-key': STOCK_RESERVATION_RESULTS.queue,
+                },
+              });
+            });
+            await channel.assertQueue(STOCK_RESERVATION_RESULTS.dlq, { durable: true });
           },
         });
       },

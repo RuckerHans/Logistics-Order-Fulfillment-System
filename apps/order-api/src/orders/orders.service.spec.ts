@@ -18,6 +18,7 @@ describe('OrdersService', () => {
     save: jest.Mock;
     insert: jest.Mock;
     findOne: jest.Mock;
+    find: jest.Mock;
   };
   let dataSource: { transaction: jest.Mock };
 
@@ -47,6 +48,12 @@ describe('OrdersService', () => {
       }),
       insert: jest.fn().mockResolvedValue(undefined),
       findOne: jest.fn(),
+      // transition() loads items via a separate, unlocked query (see the
+      // comment in orders.service.ts on why it can't be combined with the
+      // FOR UPDATE lock) — matches makeOrder()'s default items by default.
+      find: jest.fn().mockResolvedValue([
+        Object.assign(new OrderItem(), { sku: 'SKU001', qty: 2, unitPrice: '725.00' }),
+      ]),
     };
     dataSource = { transaction: jest.fn((cb) => cb(manager)) };
 
@@ -107,15 +114,30 @@ describe('OrdersService', () => {
     it('inserts a rabbitmq reserve_stock outbox row', async () => {
       await service.placeOrder(dto);
       const rabbitInsert = manager.insert.mock.calls.find(
-        ([, entry]) => entry.channel === 'rabbitmq',
+        ([, entry]) => entry.channel === 'rabbitmq' && entry.routingKey === 'reserve_stock',
       );
       expect(rabbitInsert).toBeDefined();
       const [, entry] = rabbitInsert!;
-      expect(entry.routingKey).toBe('reserve_stock');
       expect(entry.payload.items).toEqual([
         { sku: 'SKU001', qty: 2 },
         { sku: 'SKU002', qty: 1 },
       ]);
+    });
+
+    it('inserts a rabbitmq notify outbox row of type ORDER_PLACED', async () => {
+      await service.placeOrder(dto);
+      const notifyInsert = manager.insert.mock.calls.find(
+        ([, entry]) => entry.channel === 'rabbitmq' && entry.routingKey === 'notify',
+      );
+      expect(notifyInsert).toBeDefined();
+      const [, entry] = notifyInsert!;
+      expect(entry.payload.type).toBe('ORDER_PLACED');
+      expect(entry.payload.trace_id).toEqual(expect.any(String));
+    });
+
+    it('inserts exactly 3 outbox rows (kafka status_changed, rabbitmq reserve_stock, rabbitmq notify)', async () => {
+      await service.placeOrder(dto);
+      expect(manager.insert).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -142,7 +164,7 @@ describe('OrdersService', () => {
       );
     });
 
-    it('applies a valid transition, persists it, and inserts one outbox row', async () => {
+    it('applies a valid transition, persists it, and inserts the kafka + notify outbox rows', async () => {
       manager.findOne.mockResolvedValue(makeOrder({ status: OrderStatus.PLACED }));
 
       const result = await service.transition('order-1', OrderStatus.PAYMENT_CONFIRMED);
@@ -151,10 +173,25 @@ describe('OrdersService', () => {
       expect(manager.save).toHaveBeenCalledWith(
         expect.objectContaining({ status: OrderStatus.PAYMENT_CONFIRMED }),
       );
+      // PAYMENT_CONFIRMED maps to a notify type, so both rows are expected.
+      expect(manager.insert).toHaveBeenCalledTimes(2);
+
+      const kafkaEntry = manager.insert.mock.calls.find(([, e]) => e.channel === 'kafka')![1];
+      expect(kafkaEntry.payload.previous_status).toBe(OrderStatus.PLACED);
+      expect(kafkaEntry.payload.new_status).toBe(OrderStatus.PAYMENT_CONFIRMED);
+
+      const notifyEntry = manager.insert.mock.calls.find(([, e]) => e.routingKey === 'notify')![1];
+      expect(notifyEntry.payload.type).toBe('PAYMENT_CONFIRMED');
+    });
+
+    it('skips the notify insert for a transition with no customer-facing notification (PICKING)', async () => {
+      manager.findOne.mockResolvedValue(makeOrder({ status: OrderStatus.PAYMENT_CONFIRMED }));
+
+      await service.transition('order-1', OrderStatus.PICKING);
+
+      // Only the kafka status_changed row — PICKING isn't in NOTIFY's type enum.
       expect(manager.insert).toHaveBeenCalledTimes(1);
-      const [, entry] = manager.insert.mock.calls[0];
-      expect(entry.payload.previous_status).toBe(OrderStatus.PLACED);
-      expect(entry.payload.new_status).toBe(OrderStatus.PAYMENT_CONFIRMED);
+      expect(manager.insert.mock.calls[0][1].channel).toBe('kafka');
     });
 
     it('rejects an invalid transition and does not persist or publish anything', async () => {
