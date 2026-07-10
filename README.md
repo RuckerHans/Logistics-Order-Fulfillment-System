@@ -20,8 +20,204 @@ Full design reference: [docs/project-plan.md](docs/project-plan.md).
 | `fraud-service` | FastAPI + SQLAlchemy/Alembic | Rule-based fraud flags (Kafka, Python — deliberately polyglot) |
 | `web` | Next.js (App Router) | Order placement + ops dashboards |
 
-Postgres (schema-per-service), Redis (BullMQ), a 3-node RabbitMQ-management
-image, and a 3-broker Kafka KRaft cluster round out the infra.
+Postgres (schema-per-service), Redis (BullMQ), a RabbitMQ-management image,
+and a 3-broker Kafka KRaft cluster round out the infra.
+
+---
+
+## Prerequisites
+
+- Docker Desktop (with Compose v2 — `docker compose`, not the standalone
+  `docker-compose` binary)
+- Node.js 20+ and npm 10+ (for running things outside Docker, e.g. `npm run
+  migration:generate` locally)
+- ~4GB of free RAM available to Docker — the full stack is 8 app containers
+  plus Postgres, Redis, RabbitMQ, 3 Kafka brokers, Kafka UI, and kafka-init
+- **If you're on Windows:** use WSL2, and clone/run the repo from inside the
+  WSL2 filesystem (`\\wsl$\...` or a native `/home/...` path), not from
+  `/mnt/c/...` — cross-filesystem bind mounts are dramatically slower and
+  more prone to the file-watcher issues in [Troubleshooting](#troubleshooting)
+  below.
+
+---
+
+## Quickstart
+
+```bash
+# 1. Install root + workspace dependencies
+npm install
+
+# 2. Bring up everything — infra and all app services — from scratch
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build
+
+# 3. Wait for every container to report healthy
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml ps
+```
+
+`postgres`, `redis`, `rabbitmq`, and all three `kafka-*` brokers have real
+healthchecks — every app service's `depends_on` waits on those, and on
+`kafka-init` having *completed* (it's a one-shot job that creates the
+`order.status_changed` topic with the right partition/replication config,
+then exits — `Exited (0)` is its correct, healthy end state, not a failure).
+
+```bash
+# 4. Run migrations (first time only, or after any docker compose down -v)
+for svc in order-api inventory-service notification-service analytics-service audit-service; do
+  docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec $svc npm run migration:run
+done
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec fraud-service alembic upgrade head
+
+# 5. Seed minimal test data (a customer + stock for two SKUs)
+docker compose -f infra/docker-compose.yml exec -T postgres \
+  psql -U postgres -d postgres < scripts/seed.sql
+```
+
+**6. Place a test order and watch it flow through the whole system:**
+
+Open http://localhost:3100/orders/new and submit:
+- Customer ID: `11111111-1111-4111-8111-111111111111` (from the seed script)
+- Delivery address / branch: anything
+- SKU: `SKU001`, qty: `1`, unit price: `100`
+
+You should land on the new order's detail page showing status `PLACED`.
+Within a few seconds (RabbitMQ round-trip), it should be reachable — refresh
+or enable auto-refresh — while its outbox events, reservation, and
+notification are all real, independently checkable rows:
+
+```bash
+ORDER_ID=<paste the order ID from the URL>
+
+docker compose -f infra/docker-compose.yml exec postgres psql -U postgres -d postgres -c "
+SELECT status FROM order_api.orders WHERE id = '$ORDER_ID';
+SELECT channel, routing_key, published_at IS NOT NULL AS published FROM order_api.outbox WHERE aggregate_id = '$ORDER_ID';
+SELECT sku, status FROM inventory.reservations WHERE order_id = '$ORDER_ID';
+SELECT type, channel, status FROM notification.notification_log WHERE order_id = '$ORDER_ID';
+"
+```
+
+Then try `PATCH http://localhost:3000/orders/$ORDER_ID/transition` with
+`{"newStatus":"PAYMENT_CONFIRMED"}` (or use the button on the order detail
+page) and watch `analytics.order_status_events` and `audit.order_status_log`
+each pick up a new row, and `fraud.order_events`/`fraud.flagged_orders`
+correctly *not* grow (Fraud Service only evaluates rules at `PLACED`).
+
+| Endpoint | URL |
+|---|---|
+| Web UI | http://localhost:3100 |
+| Order API | http://localhost:3000 |
+| Analytics API | http://localhost:3003 |
+| Fraud API | http://localhost:8005 |
+| Kafka UI | http://localhost:8080 |
+| RabbitMQ management | http://localhost:15672 (guest/guest) |
+| Bull Board | http://localhost:3000/admin/queues |
+
+---
+
+## Directory structure
+
+```
+apps/
+  order-api/            # NestJS — state machine, outbox, BullMQ jobs, reply-queue consumer
+  inventory-service/    # NestJS — RabbitMQ reserve/release, Kafka commit/release consumer
+  notification-service/ # NestJS — RabbitMQ notify consumer
+  analytics-service/    # NestJS — Kafka consumer + read API
+  audit-service/        # NestJS — Kafka consumer, append-only log
+  fraud-service/        # FastAPI — Kafka consumer, rule engine, read API
+  web/                  # Next.js — dashboard (Server Components + Route Handler proxies)
+packages/
+  contracts/            # Shared TS types, zod schemas, contract-drift fixtures
+infra/
+  docker-compose.yml       # Infra only: postgres, redis, rabbitmq, kafka x3, kafka-ui, kafka-init
+  docker-compose.dev.yml   # App services, extends the above
+docs/
+  project-plan.md              # Full design reference — read this for the "why" behind everything
+  phase-prompts-and-checklists.md  # Build-phase prompts/checklists used during development
+  init.sql                     # Bootstrap: schemas + two-tier roles/grants only, no tables
+scripts/
+  seed.sql               # Minimal test data for local dev
+```
+
+---
+
+## Running migrations
+
+Every service has two Postgres roles: `<service>_migrator` (can `CREATE
+TABLE`, used only for migrations) and `<service>_app` (day-to-day runtime
+connection, cannot alter schema). Migrations are never run automatically on
+service boot — always an explicit step:
+
+```bash
+# Any single NestJS service
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec order-api npm run migration:run
+
+# Generate a new migration after changing a TypeORM entity (run locally, not in the container)
+cd apps/order-api && npm run migration:generate -- src/database/migrations/DescriptiveName
+
+# Fraud Service (Alembic)
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec fraud-service alembic upgrade head
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec fraud-service alembic revision --autogenerate -m "description"
+```
+
+A full `docker compose down -v` wipes both the Postgres volume and every
+RabbitMQ/Kafka queue and topic — re-run the migration and seed steps above
+after one.
+
+---
+
+## Common commands
+
+```bash
+# Logs for one service, following
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml logs -f order-api
+
+# Rebuild + restart just one service after a code change (most services also
+# hot-reload via the bind mount — this is for when that's not enough)
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build order-api
+
+# Run one service's tests locally (outside Docker)
+cd apps/order-api && npm test
+
+# Run the whole test suite across every workspace
+npm test --workspaces --if-present
+
+# Full teardown, including volumes (Postgres data + all queues/topics)
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml down -v
+```
+
+---
+
+## Troubleshooting
+
+**`fraud-service` (or any service using `--reload`/`--watch`) crashes with
+"Cannot allocate memory" once everything is running together.** This is a
+shared-inotify-watch-budget exhaustion inside Docker Desktop's WSL2 VM once
+6+ file watchers (5 NestJS `--watch` processes, Next.js's dev server, and
+Alembic's own watcher) are all running concurrently. `fraud-service`'s
+`docker-compose.dev.yml` entry already sets `WATCHFILES_FORCE_POLLING=true`
+to work around it — if you hit an equivalent crash on another service, the
+same fix (force polling instead of inotify) applies.
+
+**`curl http://localhost:PORT` hangs indefinitely, but the service is
+clearly running.** A known IPv6 loopback port-forwarding quirk in Docker
+Desktop/WSL2 — `curl` resolves `localhost` to `::1` first and hangs. Use
+`http://127.0.0.1:PORT` explicitly instead.
+
+**A freshly placed test order immediately shows `CANCELLED`.** This means
+`inventory.stock` has no row (or zero `available_qty`) for the SKU you
+used — the reservation genuinely failed as `INSUFFICIENT_STOCK` and Order
+API correctly auto-cancelled it. Run `scripts/seed.sql` (or insert stock for
+your SKU directly) before testing.
+
+**Editing a change in `packages/contracts` doesn't seem to take effect
+inside a running container.** The contracts package is consumed via its
+compiled `dist/` output, not its TypeScript source — a bind mount makes the
+source visible inside the container, but nothing recompiles it
+automatically. Run `npm run build --workspace=@logistics/contracts` on the
+host, then `docker compose restart <affected-service>` (a restart is enough;
+a full `docker compose build` is only needed if you changed a *dependency*
+of the contracts package, not its own source).
+
+---
 
 ## Why three different queues, not one
 
@@ -128,38 +324,6 @@ demonstrated by a separate, dedicated project than bolted onto this one for
 completeness. `docker-compose.yml` (infra) + `docker-compose.dev.yml` (app
 services) is the full deployment target. If this ever needs to run
 somewhere other than a laptop, that's a new project, not a Phase 7.
-
-## Running it
-
-```bash
-npm install
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build
-```
-
-Then, once containers are healthy (fresh volume only — skip if migrations
-already ran):
-
-```bash
-# TypeORM services
-for svc in order-api inventory-service notification-service analytics-service audit-service; do
-  docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec $svc npm run migration:run
-done
-
-# Fraud Service (Alembic)
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec fraud-service alembic upgrade head
-```
-
-| Endpoint | URL |
-|---|---|
-| Web UI | http://localhost:3100 |
-| Order API | http://localhost:3000 |
-| Kafka UI | http://localhost:8080 |
-| RabbitMQ management | http://localhost:15672 |
-| Bull Board | http://localhost:3000/admin/queues |
-
-A full `docker compose down -v` wipes both the Postgres volume and every
-RabbitMQ/Kafka queue and topic — re-run the migration step above (and
-re-seed `inventory.stock`) after one.
 
 ## CI
 
