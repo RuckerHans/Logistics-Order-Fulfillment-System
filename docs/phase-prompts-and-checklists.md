@@ -80,36 +80,41 @@ the job was scheduled.
 
 **Prompt:**
 ```
-Implement Kafka consumers for analytics-service, audit-service, and fraud-service
-(FastAPI + aiokafka) per Section 5.2's registry — each its own consumer group,
-exactly as named there (analytics-service, audit-service, fraud-service). The
-outbox and Kafka producer already exist from Phase 2; this phase is the consumer
-side only.
+Implement Kafka consumers for four services, each its own consumer group per
+Section 5.2's registry:
 
-Fraud Service: implement the rule engine (Section 6) with RELEVANT_STATUSES
-scoped to PLACED only — every other status must still be consumed (offset
-advances) but no-op before touching the rule engine or the database. Implement
-idempotency per Section 19.1: unique constraints + ON CONFLICT DO NOTHING for
-Analytics/Audit/Fraud, status-check no-ops for Inventory's commit/release
-(already exists from Phase 2, just confirm it's still correct once Kafka
-consumers are actually driving it instead of manual curl tests).
+- inventory-service: consumes order.status_changed, reacting to PAYMENT_CONFIRMED
+  (commit reservation) and CANCELLED (release reservation) per Section 19.1's
+  commitReservation/release logic — this does NOT already exist; Phase 2 only
+  built the RabbitMQ side (reserve_stock, notify, reply-queue consumer). Every
+  other status must be consumed (offset advances) but no-op.
+- analytics-service and audit-service: consume and persist per Section 13's
+  tables, idempotent via ON CONFLICT DO NOTHING on (order_id, new_status)
+- fraud-service (FastAPI + aiokafka): the rule engine from Section 6, with
+  RELEVANT_STATUSES scoped to PLACED only — every other status consumed but
+  no-op before touching the rule engine or database
 
-Add sequence grants were missed for any BIGSERIAL table if not already covered —
-check docs/init.sql against Section 13 for analytics.order_status_events,
-audit.order_status_log, fraud.order_events, fraud.flagged_orders.
+Check docs/init.sql against Section 13 for sequence grants on every BIGSERIAL
+table this phase touches (analytics.order_status_events, audit.order_status_log,
+fraud.order_events, fraud.flagged_orders) — confirm they're present, don't
+assume.
 
-After implementing, verify against the live stack: publish/consume a duplicate
-event manually and confirm each consumer produces exactly one row, not two.
-Confirm Fraud Service's log shows it skipping rule evaluation on non-PLACED
-transitions, not silently re-running the rules.
+After implementing, verify against the live stack: publish a duplicate
+order.status_changed event manually and confirm each of the four consumers
+produces exactly one effect, not two — including Inventory, where "effect"
+means the reservation's status column changes exactly once, not that a row
+was inserted twice. Confirm Fraud Service's logs show it explicitly skipping
+rule evaluation on non-PLACED transitions. Confirm Inventory's commit/release
+correctly no-ops on a redelivered event when the reservation is already in the
+target state (COMMITTED/RELEASED), per Section 19.1.
 ```
 
 **Review checklist — this is the highest-stakes phase remaining, budget the most review time here:**
 - Re-publish the same `order.status_changed` event twice manually (or force outbox redelivery) — does Audit end up with exactly one row? Does Fraud skip re-flagging?
+- **Inventory's commit/release is new work this phase, not a confirmation pass** — verify it actually exists as real code before verifying it's correct. Check: does a `PAYMENT_CONFIRMED` event actually flip a `RESERVED` reservation to `COMMITTED`, and does `CANCELLED` flip it to `RELEASED`? Publish the same event twice — does the reservation's status column change once, or does the second delivery error/duplicate?
 - Check Fraud Service's logs directly — does it explicitly skip on `PAYMENT_CONFIRMED`/`PICKING`/etc., or does the `RELEVANT_STATUSES` filter only exist in a comment and not the actual code path?
 - `docker stop kafka-2` mid-flow, place an order — does it still succeed? This is the actual test of whether `min.insync.replicas=2` + `acks=all` deliver what Section 8.3 claims, not just narration.
 - Check kafka-ui's consumer groups view — are `analytics-service`, `fraud-service`, `audit-service`, `inventory-service` genuinely four **distinct** groups? (This is exactly the kind of thing that silently breaks if a copy-pasted config keeps the same group ID.)
-- Now that Kafka consumers are live (not manual curl), re-verify Inventory's commit/release one more time — Phase 2 tested this via direct RabbitMQ curls; confirm the same correctness holds when Kafka is the actual trigger.
 - Confirm the Fraud Service's Postgres role (`fraud_app`) actually has the sequence grant it needs before assuming an insert works — this is the same class of bug as the `order_api.outbox` sequence-grant gap found in planning, now worth confirming it didn't slip through for Fraud/Analytics/Audit's own `BIGSERIAL` tables.
 - Ask directly: does the Fraud Service's Alembic migration match Section 13's DDL the same way order-api's TypeORM migration was checked line-by-line back in Phase 1? Don't let the second language get a lighter review than the first.
 

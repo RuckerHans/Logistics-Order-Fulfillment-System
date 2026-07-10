@@ -17,6 +17,14 @@ export interface StockReservationResult {
   unavailable_items?: { sku: string; requested_qty: number; available_qty: number }[];
 }
 
+// Thrown when a commit/release event arrives before the matching RESERVED
+// row exists (Section 19.2's race: Kafka-triggered commit racing the
+// still-in-progress RabbitMQ-triggered reserve). Transient, not an error —
+// the caller retries with a short backoff instead of failing the message.
+export class RetryableError extends Error {}
+
+export type ReservationSettlement = 'COMMITTED' | 'RELEASED';
+
 @Injectable()
 export class InventoryService {
   private readonly logger = new Logger(InventoryService.name);
@@ -89,6 +97,67 @@ export class InventoryService {
         order_id: input.orderId,
         status: 'RESERVED',
       };
+    });
+  }
+
+  // Section 19.1: PAYMENT_CONFIRMED -> commit (reserved stock actually
+  // decremented), CANCELLED -> release (reserved stock returned to
+  // available). Idempotent per reservation row: already in the target state
+  // is a safe no-op; not RESERVED and not the target state can't happen
+  // given the forward-only order state machine, but is guarded anyway.
+  async settleReservation(orderId: string, target: ReservationSettlement): Promise<void> {
+    return this.dataSource.transaction(async (manager) => {
+      const reservations = await manager.find(Reservation, {
+        where: { orderId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (reservations.length === 0) {
+        // Either 19.2's race (reserve still in flight — resolves shortly)
+        // or an order cancelled for INSUFFICIENT_STOCK (no reservation ever
+        // existed). Caller retries briefly, then treats it as a no-op.
+        throw new RetryableError(`No reservations found yet for order ${orderId}`);
+      }
+
+      for (const reservation of reservations) {
+        if (reservation.status === target) {
+          this.logger.warn(
+            `Reservation ${reservation.id} (order ${orderId}) already ${target} — no-op on redelivery`,
+          );
+          continue;
+        }
+        if (reservation.status !== 'RESERVED') {
+          // e.g. asked to COMMIT something already RELEASED — the order
+          // state machine makes this unreachable; guard loudly anyway.
+          this.logger.error(
+            `Reservation ${reservation.id} (order ${orderId}) is ${reservation.status}, cannot move to ${target} — skipping`,
+          );
+          continue;
+        }
+
+        const stock = await manager.findOne(Stock, {
+          where: { sku: reservation.sku },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!stock) {
+          this.logger.error(
+            `Stock row for sku ${reservation.sku} missing while settling order ${orderId} — skipping`,
+          );
+          continue;
+        }
+
+        stock.reservedQty -= reservation.qty;
+        if (target === 'RELEASED') {
+          stock.availableQty += reservation.qty; // cancelled: goods return to the pool
+        }
+        // COMMITTED: reserved stock actually decremented (sold), not returned.
+        await manager.save(stock);
+
+        reservation.status = target;
+        await manager.save(reservation);
+      }
+
+      this.logger.log(`Order ${orderId}: reservations settled to ${target}`);
     });
   }
 }

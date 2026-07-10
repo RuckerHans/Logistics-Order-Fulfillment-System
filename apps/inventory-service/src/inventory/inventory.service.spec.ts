@@ -2,12 +2,13 @@ import { Test } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { Reservation } from './entities/reservation.entity';
 import { Stock } from './entities/stock.entity';
-import { InventoryService } from './inventory.service';
+import { InventoryService, RetryableError } from './inventory.service';
 
 describe('InventoryService', () => {
   let service: InventoryService;
   let manager: {
     find: jest.Mock;
+    findOne: jest.Mock;
     save: jest.Mock;
     insert: jest.Mock;
   };
@@ -19,6 +20,7 @@ describe('InventoryService', () => {
   beforeEach(async () => {
     manager = {
       find: jest.fn(),
+      findOne: jest.fn(),
       save: jest.fn((entity) => Promise.resolve(entity)),
       insert: jest.fn().mockResolvedValue(undefined),
     };
@@ -141,5 +143,65 @@ describe('InventoryService', () => {
     expect(result).toEqual({ trace_id: 'trace-1', order_id: 'order-1', status: 'RESERVED' });
     expect(manager.save).not.toHaveBeenCalled();
     expect(manager.insert).not.toHaveBeenCalled();
+  });
+
+  describe('settleReservation (Section 19.1 commit/release)', () => {
+    const reservationRow = (status: string, qty = 2): Reservation =>
+      Object.assign(new Reservation(), {
+        id: 'res-1',
+        orderId: 'order-1',
+        sku: 'SKU001',
+        qty,
+        status,
+      });
+
+    it('COMMITTED: decrements reserved_qty without returning stock to available', async () => {
+      const stock = stockRow('SKU001', 8, 2);
+      manager.find.mockResolvedValue([reservationRow('RESERVED')]);
+      manager.findOne.mockResolvedValue(stock);
+
+      await service.settleReservation('order-1', 'COMMITTED');
+
+      expect(stock.reservedQty).toBe(0);
+      expect(stock.availableQty).toBe(8); // unchanged — goods are sold, not returned
+      expect(manager.save).toHaveBeenCalledWith(expect.objectContaining({ status: 'COMMITTED' }));
+    });
+
+    it('RELEASED: decrements reserved_qty AND returns stock to available', async () => {
+      const stock = stockRow('SKU001', 8, 2);
+      manager.find.mockResolvedValue([reservationRow('RESERVED')]);
+      manager.findOne.mockResolvedValue(stock);
+
+      await service.settleReservation('order-1', 'RELEASED');
+
+      expect(stock.reservedQty).toBe(0);
+      expect(stock.availableQty).toBe(10); // cancelled — goods return to the pool
+      expect(manager.save).toHaveBeenCalledWith(expect.objectContaining({ status: 'RELEASED' }));
+    });
+
+    it('no-ops when the reservation is already in the target state (redelivered event)', async () => {
+      manager.find.mockResolvedValue([reservationRow('COMMITTED')]);
+
+      await service.settleReservation('order-1', 'COMMITTED');
+
+      // No stock lookup, no save — the loop continues past an already-settled row.
+      expect(manager.findOne).not.toHaveBeenCalled();
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('throws RetryableError when no reservation exists yet (19.2 race / insufficient-stock cancel)', async () => {
+      manager.find.mockResolvedValue([]);
+
+      await expect(service.settleReservation('order-1', 'RELEASED')).rejects.toThrow(RetryableError);
+    });
+
+    it('skips (loudly, without touching stock) a reservation in a conflicting settled state', async () => {
+      manager.find.mockResolvedValue([reservationRow('RELEASED')]);
+
+      await service.settleReservation('order-1', 'COMMITTED');
+
+      expect(manager.findOne).not.toHaveBeenCalled();
+      expect(manager.save).not.toHaveBeenCalled();
+    });
   });
 });

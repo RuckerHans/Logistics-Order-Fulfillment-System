@@ -1,0 +1,18 @@
+# Dev-mode only (Section 22) — bind-mounted source, not a production build.
+#
+# Unlike the Node services, no monorepo-root context needed at runtime — the
+# only cross-package dependency is the contract-test fixtures, which run via
+# pytest, not in the serving path. Context is still the repo root so the
+# fixtures can be copied in for in-container test runs.
+FROM python:3.12-slim
+
+WORKDIR /repo/apps/fraud-service
+
+COPY apps/fraud-service/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir pytest pytest-asyncio
+
+COPY packages/contracts/fixtures /repo/packages/contracts/fixtures
+COPY apps/fraud-service .
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

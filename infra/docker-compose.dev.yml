@@ -54,12 +54,17 @@ services:
       DATABASE_URL: postgres://inventory_app:change_me@postgres:5432/postgres
       MIGRATION_DATABASE_URL: postgres://inventory_migrator:change_me@postgres:5432/postgres
       RABBITMQ_URL: amqp://rabbitmq:5672
+      KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
       PORT: 3000
     ports: ["3001:3000"]
     networks: [logistics-net]
     depends_on:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+      kafka-1: { condition: service_healthy }
+      kafka-2: { condition: service_healthy }
+      kafka-3: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
 
   notification-service:
     build:
@@ -77,3 +82,62 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+
+  analytics-service:
+    build:
+      context: ..
+      dockerfile: apps/analytics-service/Dockerfile.dev
+    volumes:
+      - ../apps/analytics-service:/repo/apps/analytics-service
+    environment:
+      DATABASE_URL: postgres://analytics_app:change_me@postgres:5432/postgres
+      MIGRATION_DATABASE_URL: postgres://analytics_migrator:change_me@postgres:5432/postgres
+      KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+      PORT: 3000
+    ports: ["3003:3000"]
+    networks: [logistics-net]
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-1: { condition: service_healthy }
+      kafka-2: { condition: service_healthy }
+      kafka-3: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  audit-service:
+    build:
+      context: ..
+      dockerfile: apps/audit-service/Dockerfile.dev
+    volumes:
+      - ../apps/audit-service:/repo/apps/audit-service
+    environment:
+      DATABASE_URL: postgres://audit_app:change_me@postgres:5432/postgres
+      MIGRATION_DATABASE_URL: postgres://audit_migrator:change_me@postgres:5432/postgres
+      KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+      PORT: 3000
+    ports: ["3004:3000"]
+    networks: [logistics-net]
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-1: { condition: service_healthy }
+      kafka-2: { condition: service_healthy }
+      kafka-3: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  fraud-service:
+    build:
+      context: ..
+      dockerfile: apps/fraud-service/Dockerfile.dev
+    volumes:
+      - ../apps/fraud-service:/repo/apps/fraud-service
+    environment:
+      DATABASE_URL: postgresql+asyncpg://fraud_app:change_me@postgres:5432/postgres
+      MIGRATION_DATABASE_URL: postgresql+psycopg2://fraud_migrator:change_me@postgres:5432/postgres
+      KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+    ports: ["8005:8000"]
+    networks: [logistics-net]
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-1: { condition: service_healthy }
+      kafka-2: { condition: service_healthy }
+      kafka-3: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
