@@ -2,6 +2,8 @@ import Link from "next/link";
 import { fetchFlags, fetchFlagsByOrder } from "@/lib/api";
 import { SeverityBadge } from "@/components/SeverityBadge";
 import { RefreshButton } from "@/components/RefreshButton";
+import { PageHeader } from "@/components/PageHeader";
+import { EmptyState } from "@/components/EmptyState";
 import { formatDateTime } from "@/lib/format";
 
 export default async function FraudPage({
@@ -22,18 +24,15 @@ export default async function FraudPage({
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-gray-900">Fraud Flags</h1>
-        <RefreshButton />
-      </div>
+      <PageHeader title="Fraud Flags" actions={<RefreshButton />} />
 
-      <form className="mt-6 flex gap-2" action="/fraud">
+      <form className="mt-6 flex flex-wrap gap-2" action="/fraud">
         <input
           type="text"
           name="orderId"
           defaultValue={orderId ?? ""}
           placeholder="Filter by order ID"
-          className="w-80 rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:border-gray-500 focus:outline-none"
+          className="w-full min-w-0 flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:border-gray-500 focus:outline-none sm:max-w-xs"
         />
         <button type="submit" className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800">
           Filter
@@ -54,9 +53,15 @@ export default async function FraudPage({
         </div>
       )}
 
-      {!error && (
+      {!error && flags.length === 0 && (
+        <div className="mt-6">
+          <EmptyState label={orderId ? "No flags for this order." : "No fraud flags recorded."} />
+        </div>
+      )}
+
+      {!error && flags.length > 0 && (
         <div className="mt-6 overflow-x-auto rounded-lg border border-gray-200 bg-white">
-          <table className="w-full text-left text-sm">
+          <table className="w-full min-w-[720px] text-left text-sm">
             <thead className="border-b border-gray-200 bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
               <tr>
                 <th className="px-4 py-3 font-medium">Order</th>
@@ -70,7 +75,7 @@ export default async function FraudPage({
               {flags.map((flag) => (
                 <tr key={flag.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 font-mono text-xs text-gray-700">
-                    <Link href={`/orders/${flag.order_id}`} className="hover:underline">
+                    <Link href={`/orders/${flag.order_id}`} className="hover:underline" title={flag.order_id}>
                       {flag.order_id.slice(0, 8)}…
                     </Link>
                   </td>
@@ -82,13 +87,6 @@ export default async function FraudPage({
                   <td className="px-4 py-3 text-gray-500">{formatDateTime(flag.created_at)}</td>
                 </tr>
               ))}
-              {flags.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-gray-400">
-                    {orderId ? "No flags for this order." : "No fraud flags recorded."}
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>

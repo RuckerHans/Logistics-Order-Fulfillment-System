@@ -3,6 +3,8 @@ import { fetchOrders } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Pagination } from "@/components/Pagination";
 import { RefreshButton } from "@/components/RefreshButton";
+import { PageHeader } from "@/components/PageHeader";
+import { EmptyState } from "@/components/EmptyState";
 import { formatDateTime, formatMoney } from "@/lib/format";
 
 export default async function OrdersPage({
@@ -24,15 +26,17 @@ export default async function OrdersPage({
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-gray-900">Orders</h1>
-        <div className="flex items-center gap-3">
-          <RefreshButton />
-          <Link href="/orders/new" className="rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-800">
-            + New Order
-          </Link>
-        </div>
-      </div>
+      <PageHeader
+        title="Orders"
+        actions={
+          <>
+            <RefreshButton />
+            <Link href="/orders/new" className="rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-800">
+              + New Order
+            </Link>
+          </>
+        }
+      />
 
       {error && (
         <div className="mt-6 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -40,10 +44,16 @@ export default async function OrdersPage({
         </div>
       )}
 
-      {result && (
+      {result && result.data.length === 0 && (
+        <div className="mt-6">
+          <EmptyState label="No orders yet." />
+        </div>
+      )}
+
+      {result && result.data.length > 0 && (
         <>
           <div className="mt-6 overflow-x-auto rounded-lg border border-gray-200 bg-white">
-            <table className="w-full text-left text-sm">
+            <table className="w-full min-w-[640px] text-left text-sm">
               <thead className="border-b border-gray-200 bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
                 <tr>
                   <th className="px-4 py-3 font-medium">Order</th>
@@ -57,11 +67,13 @@ export default async function OrdersPage({
                 {result.data.map((order) => (
                   <tr key={order.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 font-mono text-xs text-gray-700">
-                      <Link href={`/orders/${order.id}`} className="hover:underline">
+                      <Link href={`/orders/${order.id}`} className="hover:underline" title={order.id}>
                         {order.id.slice(0, 8)}…
                       </Link>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{order.customerId.slice(0, 8)}…</td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-500" title={order.customerId}>
+                      {order.customerId.slice(0, 8)}…
+                    </td>
                     <td className="px-4 py-3">
                       <StatusBadge status={order.status} />
                     </td>
@@ -69,13 +81,6 @@ export default async function OrdersPage({
                     <td className="px-4 py-3 text-gray-500">{formatDateTime(order.createdAt)}</td>
                   </tr>
                 ))}
-                {result.data.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-gray-400">
-                      No orders yet.
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>

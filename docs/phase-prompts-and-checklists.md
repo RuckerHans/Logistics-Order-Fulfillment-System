@@ -293,6 +293,10 @@ the on/off state moves to Redux.
 
 ### Prompt 3 — Responsive/UI polish
 
+**Note before starting — this phase cannot be self-verified by Claude Code.** Everything in this prompt is visual/layout work with no headless-browser or screenshot tool available to confirm it, the same limitation honestly flagged for the Recharts rendering check back in Phase 5. Claude Code can build, lint, and describe what the CSS *should* do, but "does it actually look right at phone width" is a human check, not something to expect a "verified" claim about from the agent's own output.
+
+**Prerequisite:** run `scripts/seed.sql` and place at least one real test order first (per the Quickstart) — several of this phase's checks (long-UUID truncation, a populated table wrapping correctly) are untestable against an empty database.
+
 **Prompt:**
 ```
 Polish only — no new functionality, no Redux changes.
@@ -311,10 +315,16 @@ Polish only — no new functionality, no Redux changes.
   have zero data (empty order list, no fraud flags, no analytics data yet)
   — some of this may already exist from Phase 5, don't duplicate it.
 
+This is CSS/layout work — it should not require any new 'use client'
+components. If an empty state genuinely needs interactivity (unlikely),
+verify its Client/Server boundary the same way Prompt 1 and 2 did: a
+temporary client child for testing, never by converting the page itself.
+
 Do not introduce shadcn/ui or any new component library. Do not touch
 backend services.
 ```
 
-**Review checklist:**
+**Review checklist (human-verified — resize an actual browser, don't take a "looks correct" claim at face value):**
 - Resize the browser to a phone width and check: does the orders table scroll horizontally instead of squishing, do transition buttons wrap instead of overflowing, do long IDs truncate cleanly?
 - Confirm empty states render correctly for a genuinely empty result (e.g. filter fraud flags by a nonexistent order ID) rather than an empty table with just headers.
+- Confirm no page picked up an unnecessary `'use client'` directive as a side effect of this phase's changes.

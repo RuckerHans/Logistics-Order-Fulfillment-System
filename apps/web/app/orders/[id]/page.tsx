@@ -13,12 +13,16 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
 
   return (
     <div>
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="break-all text-2xl font-semibold text-gray-900">Order {order.id}</h1>
-          <p className="mt-1 break-all text-sm text-gray-500">trace: {order.traceId}</p>
+          <h1 className="truncate text-2xl font-semibold text-gray-900" title={order.id}>
+            Order {order.id}
+          </h1>
+          <p className="mt-1 truncate text-sm text-gray-500" title={order.traceId}>
+            trace: {order.traceId}
+          </p>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <AutoRefreshToggle />
           <RefreshButton />
         </div>
@@ -38,7 +42,9 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
           <dl className="space-y-2">
             <div className="flex justify-between gap-4">
               <dt className="shrink-0 text-gray-500">Customer</dt>
-              <dd className="truncate font-mono text-xs">{order.customerId}</dd>
+              <dd className="truncate font-mono text-xs" title={order.customerId}>
+                {order.customerId}
+              </dd>
             </div>
             <div className="flex justify-between gap-4">
               <dt className="shrink-0 text-gray-500">Branch</dt>
@@ -67,7 +73,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
       <div className="mt-6 rounded-lg border border-gray-200 bg-white p-5">
         <h2 className="text-sm font-medium text-gray-500">Items</h2>
         <div className="mt-3 overflow-x-auto">
-          <table className="w-full text-left text-sm">
+          <table className="w-full min-w-[480px] text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-gray-400">
               <tr>
                 <th className="py-2 pr-4 font-medium">SKU</th>

@@ -112,13 +112,13 @@ export function OrderForm() {
         </div>
         <div className="mt-2 space-y-2">
           {items.map((row, i) => (
-            <div key={i} className="flex gap-2">
+            <div key={i} className="flex flex-wrap gap-2">
               <input
                 required
                 value={row.sku}
                 onChange={(e) => updateItem(i, "sku", e.target.value)}
                 placeholder="SKU"
-                className="w-1/3 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+                className="min-w-[120px] flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
               />
               <input
                 required
@@ -128,7 +128,7 @@ export function OrderForm() {
                 value={row.qty}
                 onChange={(e) => updateItem(i, "qty", e.target.value)}
                 placeholder="Qty"
-                className="w-24 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+                className="w-20 shrink-0 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none sm:w-24"
               />
               <input
                 required
@@ -138,7 +138,7 @@ export function OrderForm() {
                 value={row.unitPrice}
                 onChange={(e) => updateItem(i, "unitPrice", e.target.value)}
                 placeholder="Unit price"
-                className="w-32 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+                className="w-24 shrink-0 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none sm:w-32"
               />
               <button
                 type="button"

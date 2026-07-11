@@ -3,6 +3,7 @@ import { OrdersPerHourChart } from "@/components/charts/OrdersPerHourChart";
 import { TimeInStatusChart } from "@/components/charts/TimeInStatusChart";
 import { RefreshButton } from "@/components/RefreshButton";
 import { StatusBadge } from "@/components/StatusBadge";
+import { PageHeader } from "@/components/PageHeader";
 import { formatMoney } from "@/lib/format";
 import type { OrderStatus } from "@/lib/types";
 
@@ -22,10 +23,7 @@ export default async function AnalyticsPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-gray-900">Analytics</h1>
-        <RefreshButton />
-      </div>
+      <PageHeader title="Analytics" actions={<RefreshButton />} />
 
       {anyError && (
         <div className="mt-6 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

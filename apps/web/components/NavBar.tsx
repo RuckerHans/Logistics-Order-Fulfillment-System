@@ -15,11 +15,11 @@ export function NavBar() {
 
   return (
     <header className="border-b border-gray-200 bg-white">
-      <div className="mx-auto flex max-w-6xl items-center gap-8 px-6 py-4">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-8 gap-y-2 px-6 py-4">
         <Link href="/" className="text-lg font-semibold text-gray-900">
           Logistics Ops
         </Link>
-        <nav className="flex gap-6 text-sm font-medium">
+        <nav className="flex flex-wrap gap-x-6 gap-y-2 text-sm font-medium">
           {LINKS.map((link) => {
             const active = link.match(pathname ?? "");
             return (
