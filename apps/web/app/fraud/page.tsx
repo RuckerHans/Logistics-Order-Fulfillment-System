@@ -1,10 +1,14 @@
 import Link from "next/link";
+import { Search, X } from "lucide-react";
 import { fetchFlags, fetchFlagsByOrder } from "@/lib/api";
 import { SeverityBadge } from "@/components/SeverityBadge";
 import { RefreshButton } from "@/components/RefreshButton";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";
 
 export default async function FraudPage({
@@ -33,18 +37,17 @@ export default async function FraudPage({
           name="orderId"
           defaultValue={orderId ?? ""}
           placeholder="Filter by order ID"
-          className="w-full min-w-0 flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:border-gray-500 focus:outline-none sm:max-w-xs"
+          className="w-full min-w-0 flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:border-indigo-500 focus:outline-none sm:max-w-xs"
         />
-        <button type="submit" className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800">
+        <Button type="submit" className="bg-indigo-600 text-white shadow-sm hover:bg-indigo-700">
+          <Search className="size-4" />
           Filter
-        </button>
+        </Button>
         {orderId && (
-          <Link
-            href="/fraud"
-            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-          >
+          <Button type="button" variant="outline" render={<Link href="/fraud" />} nativeButton={false}>
+            <X className="size-4" />
             Clear
-          </Link>
+          </Button>
         )}
       </form>
 
@@ -61,36 +64,36 @@ export default async function FraudPage({
       )}
 
       {!error && flags.length > 0 && (
-        <div className="mt-6 overflow-x-auto rounded-lg border border-gray-200 bg-white">
-          <table className="w-full min-w-[720px] text-left text-sm">
-            <thead className="border-b border-gray-200 bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
-              <tr>
-                <th className="px-4 py-3 font-medium">Order</th>
-                <th className="px-4 py-3 font-medium">Rule</th>
-                <th className="px-4 py-3 font-medium">Severity</th>
-                <th className="px-4 py-3 font-medium">Reason</th>
-                <th className="px-4 py-3 font-medium">Flagged At</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
+        <Card className="mt-6 gap-0 overflow-hidden py-0 shadow-sm">
+          <Table className="min-w-[720px]">
+            <TableHeader className="bg-gray-50">
+              <TableRow className="hover:bg-gray-50">
+                <TableHead className="px-4 py-3">Order</TableHead>
+                <TableHead className="px-4 py-3">Rule</TableHead>
+                <TableHead className="px-4 py-3">Severity</TableHead>
+                <TableHead className="px-4 py-3">Reason</TableHead>
+                <TableHead className="px-4 py-3">Flagged At</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {flags.map((flag) => (
-                <tr key={flag.id} className="hover:bg-gray-100">
-                  <td className="px-4 py-3 font-mono text-xs text-gray-700">
+                <TableRow key={flag.id} className="hover:bg-indigo-50/50">
+                  <TableCell className="px-4 py-3 font-mono text-xs text-gray-700">
                     <Link href={`/orders/${flag.order_id}`} className="hover:underline" title={flag.order_id}>
                       {flag.order_id.slice(0, 8)}…
                     </Link>
-                  </td>
-                  <td className="px-4 py-3 text-gray-700">{flag.rule_name}</td>
-                  <td className="px-4 py-3">
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-gray-700">{flag.rule_name}</TableCell>
+                  <TableCell className="px-4 py-3">
                     <SeverityBadge severity={flag.severity} />
-                  </td>
-                  <td className="px-4 py-3 text-gray-600">{flag.reason}</td>
-                  <td className="px-4 py-3 text-gray-500">{formatDateTime(flag.created_at)}</td>
-                </tr>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 whitespace-normal text-gray-600">{flag.reason}</TableCell>
+                  <TableCell className="px-4 py-3 text-gray-500">{formatDateTime(flag.created_at)}</TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </Card>
       )}
     </div>
   );

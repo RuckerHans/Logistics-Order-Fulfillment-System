@@ -1,9 +1,11 @@
+import { ShoppingBag, DollarSign, ListChecks, TrendingUp, Clock } from "lucide-react";
 import { fetchSummary, fetchOrdersPerHour, fetchTimeInStatus } from "@/lib/api";
 import { OrdersPerHourChart } from "@/components/charts/OrdersPerHourChart";
 import { TimeInStatusChart } from "@/components/charts/TimeInStatusChart";
 import { RefreshButton } from "@/components/RefreshButton";
 import { StatusBadge } from "@/components/StatusBadge";
 import { PageHeader } from "@/components/PageHeader";
+import { Card } from "@/components/ui/card";
 import { formatMoney } from "@/lib/format";
 import type { OrderStatus } from "@/lib/types";
 
@@ -32,20 +34,37 @@ export default async function AnalyticsPage() {
       )}
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <h3 className="text-sm font-medium text-gray-500">Total Orders Placed</h3>
-          <p className="mt-2 text-2xl font-bold text-gray-900">
-            {summary ? summary.totalOrdersPlaced.toLocaleString() : "—"}
-          </p>
-        </div>
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <h3 className="text-sm font-medium text-gray-500">Total Order Value</h3>
-          <p className="mt-2 text-2xl font-bold text-gray-900">
-            {summary ? formatMoney(summary.totalOrderValue) : "—"}
-          </p>
-        </div>
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <h3 className="text-sm font-medium text-gray-500">Orders by Status</h3>
+        <Card className="p-5 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+              <ShoppingBag className="size-5" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm text-gray-500">Total Orders Placed</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {summary ? summary.totalOrdersPlaced.toLocaleString() : "—"}
+              </p>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-5 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-green-50 text-green-600">
+              <DollarSign className="size-5" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm text-gray-500">Total Order Value</p>
+              <p className="text-2xl font-bold text-gray-900">{summary ? formatMoney(summary.totalOrderValue) : "—"}</p>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-5 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
+              <ListChecks className="size-5" />
+            </div>
+            <p className="text-sm text-gray-500">Orders by Status</p>
+          </div>
           <div className="mt-3 flex flex-wrap gap-x-3 gap-y-2">
             {statusEntries.length > 0 ? (
               statusEntries.map(([status, count]) => (
@@ -58,24 +77,30 @@ export default async function AnalyticsPage() {
               <span className="text-sm text-gray-400">No data</span>
             )}
           </div>
-        </div>
+        </Card>
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <h2 className="font-semibold text-gray-900">Orders per Hour</h2>
+        <Card className="p-5 shadow-sm">
+          <div className="flex items-center gap-2 text-gray-900">
+            <TrendingUp className="size-4 text-violet-600" />
+            <h2 className="font-semibold">Orders per Hour</h2>
+          </div>
           <p className="text-sm text-gray-500">Last 24 hours</p>
           <div className="mt-4">
             <OrdersPerHourChart data={oph} />
           </div>
-        </div>
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <h2 className="font-semibold text-gray-900">Average Time in Status</h2>
+        </Card>
+        <Card className="p-5 shadow-sm">
+          <div className="flex items-center gap-2 text-gray-900">
+            <Clock className="size-4 text-indigo-600" />
+            <h2 className="font-semibold">Average Time in Status</h2>
+          </div>
           <p className="text-sm text-gray-500">Before transitioning to the next status</p>
           <div className="mt-4">
             <TimeInStatusChart data={tis} />
           </div>
-        </div>
+        </Card>
       </div>
     </div>
   );

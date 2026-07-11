@@ -2,6 +2,8 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 // Manual refresh: re-runs the enclosing Server Component's data fetch via
 // router.refresh() — still a server-side fetch against the backend, so no
@@ -11,13 +13,15 @@ export function RefreshButton() {
   const [isPending, startTransition] = useTransition();
 
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
       onClick={() => startTransition(() => router.refresh())}
       disabled={isPending}
-      className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+      className="border-gray-200 bg-white text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-70"
     >
+      <RefreshCw className={isPending ? "size-4 animate-spin" : "size-4"} />
       {isPending ? "Refreshing…" : "Refresh"}
-    </button>
+    </Button>
   );
 }

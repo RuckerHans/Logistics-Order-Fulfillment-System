@@ -1,11 +1,13 @@
 "use client";
 
+import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useAppDispatch } from "@/store/hooks";
 import { useTransitionOrderMutation, rtkErrorMessages } from "@/store/api";
 import { toastAdded } from "@/store/slices/uiSlice";
 import { nextTransitions } from "@/lib/statusMachine";
 import { STATUS_STYLE } from "@/lib/statusStyles";
+import { Button } from "@/components/ui/button";
 import type { OrderStatus } from "@/lib/types";
 
 export function TransitionActions({ orderId, status }: { orderId: string; status: OrderStatus }) {
@@ -32,17 +34,28 @@ export function TransitionActions({ orderId, status }: { orderId: string; status
 
   return (
     <div className="flex flex-wrap gap-2">
-      {targets.map((target) => (
-        <button
-          key={target}
-          type="button"
-          onClick={() => transition(target)}
-          disabled={isLoading}
-          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-        >
-          {pendingTarget === target ? "Updating…" : `Mark as ${STATUS_STYLE[target]?.label ?? target}`}
-        </button>
-      ))}
+      {targets.map((target) => {
+        const Icon = STATUS_STYLE[target]?.icon;
+        const pending = pendingTarget === target;
+        const isCancel = target === "CANCELLED";
+        return (
+          <Button
+            key={target}
+            type="button"
+            variant={isCancel ? "outline" : undefined}
+            onClick={() => transition(target)}
+            disabled={isLoading}
+            className={
+              isCancel
+                ? "border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
+                : "bg-indigo-600 text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+            }
+          >
+            {pending ? <Loader2 className="size-4 animate-spin" /> : Icon && <Icon className="size-4" />}
+            {pending ? "Updating…" : `Mark as ${STATUS_STYLE[target]?.label ?? target}`}
+          </Button>
+        );
+      })}
     </div>
   );
 }

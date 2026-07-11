@@ -1,8 +1,16 @@
+import { Skeleton } from "@/components/ui/skeleton";
+
 export function LoadingState({ label = "Loading…" }: { label?: string }) {
   return (
-    <div className="flex min-h-40 items-center justify-center gap-3 text-sm text-gray-400">
-      <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
-      {label}
+    <div
+      role="status"
+      aria-label={label}
+      className="space-y-3 rounded-lg border border-gray-200 bg-white p-5 shadow-sm"
+    >
+      <Skeleton className="h-4 w-1/3" />
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-5/6" />
+      <Skeleton className="h-4 w-2/3" />
     </div>
   );
 }

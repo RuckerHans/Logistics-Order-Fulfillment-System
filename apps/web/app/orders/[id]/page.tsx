@@ -4,6 +4,9 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { TransitionActions } from "@/components/TransitionActions";
 import { RefreshButton } from "@/components/RefreshButton";
 import { AutoRefreshToggle } from "@/components/AutoRefreshToggle";
+import { PageHeader } from "@/components/PageHeader";
+import { Card } from "@/components/ui/card";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { formatDateTime, formatMoney } from "@/lib/format";
 
 export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -13,32 +16,30 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
 
   return (
     <div>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="truncate text-2xl font-bold tracking-tight text-gray-900" title={order.id}>
-            Order {order.id}
-          </h1>
-          <p className="mt-1 truncate text-sm text-gray-500" title={order.traceId}>
-            trace: {order.traceId}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <AutoRefreshToggle />
-          <RefreshButton />
-        </div>
-      </div>
+      <PageHeader
+        title={`Order ${order.id}`}
+        titleAttr={order.id}
+        subtitle={`trace: ${order.traceId}`}
+        subtitleAttr={order.traceId}
+        actions={
+          <>
+            <AutoRefreshToggle />
+            <RefreshButton />
+          </>
+        }
+      />
 
       <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <h2 className="text-sm font-medium text-gray-500">Status</h2>
+        <Card className="p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-gray-500">Status</h2>
           <div className="mt-2">
             <StatusBadge status={order.status} />
           </div>
           <div className="mt-4">
             <TransitionActions orderId={order.id} status={order.status} />
           </div>
-        </div>
-        <div className="rounded-lg border border-gray-200 bg-white p-5 text-sm">
+        </Card>
+        <Card className="p-5 text-sm shadow-sm">
           <dl className="space-y-2">
             <div className="flex justify-between gap-4">
               <dt className="shrink-0 text-gray-500">Customer</dt>
@@ -56,7 +57,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             </div>
             <div className="flex justify-between gap-4">
               <dt className="shrink-0 text-gray-500">Total</dt>
-              <dd>{formatMoney(order.totalValue)}</dd>
+              <dd className="font-semibold text-gray-900">{formatMoney(order.totalValue)}</dd>
             </div>
             <div className="flex justify-between gap-4">
               <dt className="shrink-0 text-gray-500">Created</dt>
@@ -67,34 +68,34 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
               <dd>{formatDateTime(order.updatedAt)}</dd>
             </div>
           </dl>
-        </div>
+        </Card>
       </div>
 
-      <div className="mt-6 rounded-lg border border-gray-200 bg-white p-5">
-        <h2 className="text-sm font-medium text-gray-500">Items</h2>
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[480px] text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-gray-400">
-              <tr>
-                <th className="py-2 pr-4 font-medium">SKU</th>
-                <th className="py-2 pr-4 font-medium">Qty</th>
-                <th className="py-2 pr-4 font-medium">Unit Price</th>
-                <th className="py-2 font-medium">Subtotal</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {order.items.map((item) => (
-                <tr key={item.id} className="hover:bg-gray-100">
-                  <td className="py-2 pr-4">{item.sku}</td>
-                  <td className="py-2 pr-4">{item.qty}</td>
-                  <td className="py-2 pr-4">{formatMoney(item.unitPrice)}</td>
-                  <td className="py-2">{formatMoney(Number(item.unitPrice) * item.qty)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <Card className="mt-6 gap-3 py-5 shadow-sm">
+        <h2 className="px-5 text-sm font-semibold text-gray-500">Items</h2>
+        <Table className="min-w-[480px]">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="px-5">SKU</TableHead>
+              <TableHead className="px-5">Qty</TableHead>
+              <TableHead className="px-5">Unit Price</TableHead>
+              <TableHead className="px-5">Subtotal</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {order.items.map((item) => (
+              <TableRow key={item.id} className="hover:bg-indigo-50/50">
+                <TableCell className="px-5">{item.sku}</TableCell>
+                <TableCell className="px-5">{item.qty}</TableCell>
+                <TableCell className="px-5">{formatMoney(item.unitPrice)}</TableCell>
+                <TableCell className="px-5 font-semibold text-gray-900">
+                  {formatMoney(Number(item.unitPrice) * item.qty)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
     </div>
   );
 }

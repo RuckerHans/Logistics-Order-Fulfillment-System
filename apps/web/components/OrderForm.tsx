@@ -2,6 +2,7 @@
 
 import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { Loader2, Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { useCreateOrderMutation, rtkErrorMessages } from "@/store/api";
 import {
@@ -16,6 +17,7 @@ import {
   type OrderFormItem,
 } from "@/store/slices/orderFormSlice";
 import { toastAdded } from "@/store/slices/uiSlice";
+import { Button } from "@/components/ui/button";
 
 export function OrderForm() {
   const router = useRouter();
@@ -73,7 +75,7 @@ export function OrderForm() {
           value={customerId}
           onChange={(e) => dispatch(customerIdSet(e.target.value))}
           placeholder="uuid"
-          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:border-gray-500 focus:outline-none"
+          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:border-indigo-500 focus:outline-none"
         />
         <p className="mt-1 text-xs text-gray-400">Must be an existing customer UUID from elsewhere in the system.</p>
       </div>
@@ -84,7 +86,7 @@ export function OrderForm() {
           required
           value={deliveryAddress}
           onChange={(e) => dispatch(deliveryAddressSet(e.target.value))}
-          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
         />
       </div>
 
@@ -95,7 +97,7 @@ export function OrderForm() {
           value={branchId}
           onChange={(e) => dispatch(branchIdSet(e.target.value))}
           placeholder="branch_01"
-          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
         />
       </div>
 
@@ -105,9 +107,10 @@ export function OrderForm() {
           <button
             type="button"
             onClick={() => dispatch(itemAdded())}
-            className="text-sm font-medium text-gray-700 hover:text-gray-900"
+            className="flex items-center gap-1 text-sm font-medium text-indigo-600 hover:text-indigo-700"
           >
-            + Add item
+            <Plus className="size-4" />
+            Add item
           </button>
         </div>
         <div className="mt-2 space-y-2">
@@ -118,7 +121,7 @@ export function OrderForm() {
                 value={row.sku}
                 onChange={(e) => updateItem(i, "sku", e.target.value)}
                 placeholder="SKU"
-                className="min-w-[120px] flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+                className="min-w-[120px] flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
               />
               <input
                 required
@@ -128,7 +131,7 @@ export function OrderForm() {
                 value={row.qty}
                 onChange={(e) => updateItem(i, "qty", e.target.value)}
                 placeholder="Qty"
-                className="w-20 shrink-0 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none sm:w-24"
+                className="w-20 shrink-0 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none sm:w-24"
               />
               <input
                 required
@@ -138,28 +141,31 @@ export function OrderForm() {
                 value={row.unitPrice}
                 onChange={(e) => updateItem(i, "unitPrice", e.target.value)}
                 placeholder="Unit price"
-                className="w-24 shrink-0 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none sm:w-32"
+                className="w-24 shrink-0 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none sm:w-32"
               />
-              <button
+              <Button
                 type="button"
+                variant="outline"
+                size="icon"
                 onClick={() => dispatch(itemRemoved(i))}
                 disabled={items.length === 1}
-                className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Remove item"
               >
-                Remove
-              </button>
+                <Trash2 className="size-4" />
+              </Button>
             </div>
           ))}
         </div>
       </div>
 
-      <button
+      <Button
         type="submit"
         disabled={isLoading}
-        className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+        className="bg-indigo-600 text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
       >
+        {isLoading ? <Loader2 className="size-4 animate-spin" /> : <ShoppingCart className="size-4" />}
         {isLoading ? "Placing order…" : "Place Order"}
-      </button>
+      </Button>
     </form>
   );
 }

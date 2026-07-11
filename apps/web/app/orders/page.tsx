@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { fetchOrders } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Pagination } from "@/components/Pagination";
@@ -6,6 +7,9 @@ import { RefreshButton } from "@/components/RefreshButton";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { formatDateTime, formatMoney } from "@/lib/format";
 
 export default async function OrdersPage({
@@ -32,9 +36,14 @@ export default async function OrdersPage({
         actions={
           <>
             <RefreshButton />
-            <Link href="/orders/new" className="rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-800">
-              + New Order
-            </Link>
+            <Button
+              render={<Link href="/orders/new" />}
+              nativeButton={false}
+              className="bg-indigo-600 text-white shadow-sm hover:bg-indigo-700"
+            >
+              <Plus className="size-4" />
+              New Order
+            </Button>
           </>
         }
       />
@@ -53,38 +62,40 @@ export default async function OrdersPage({
 
       {result && result.data.length > 0 && (
         <>
-          <div className="mt-6 overflow-x-auto rounded-lg border border-gray-200 bg-white">
-            <table className="w-full min-w-[640px] text-left text-sm">
-              <thead className="border-b border-gray-200 bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
-                <tr>
-                  <th className="px-4 py-3 font-medium">Order</th>
-                  <th className="px-4 py-3 font-medium">Customer</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Total</th>
-                  <th className="px-4 py-3 font-medium">Created</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
+          <Card className="mt-6 gap-0 overflow-hidden py-0 shadow-sm">
+            <Table className="min-w-[640px]">
+              <TableHeader className="bg-gray-50">
+                <TableRow className="hover:bg-gray-50">
+                  <TableHead className="px-4 py-3">Order</TableHead>
+                  <TableHead className="px-4 py-3">Customer</TableHead>
+                  <TableHead className="px-4 py-3">Status</TableHead>
+                  <TableHead className="px-4 py-3">Total</TableHead>
+                  <TableHead className="px-4 py-3">Created</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {result.data.map((order) => (
-                  <tr key={order.id} className="hover:bg-gray-100">
-                    <td className="px-4 py-3 font-mono text-xs text-gray-700">
+                  <TableRow key={order.id} className="hover:bg-indigo-50/50">
+                    <TableCell className="px-4 py-3 font-mono text-xs text-gray-700">
                       <Link href={`/orders/${order.id}`} className="hover:underline" title={order.id}>
                         {order.id.slice(0, 8)}…
                       </Link>
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-500" title={order.customerId}>
+                    </TableCell>
+                    <TableCell className="px-4 py-3 font-mono text-xs text-gray-500" title={order.customerId}>
                       {order.customerId.slice(0, 8)}…
-                    </td>
-                    <td className="px-4 py-3">
+                    </TableCell>
+                    <TableCell className="px-4 py-3">
                       <StatusBadge status={order.status} />
-                    </td>
-                    <td className="px-4 py-3 text-gray-700">{formatMoney(order.totalValue)}</td>
-                    <td className="px-4 py-3 text-gray-500">{formatDateTime(order.createdAt)}</td>
-                  </tr>
+                    </TableCell>
+                    <TableCell className="px-4 py-3 font-semibold text-gray-900">
+                      {formatMoney(order.totalValue)}
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-gray-500">{formatDateTime(order.createdAt)}</TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </TableBody>
+            </Table>
+          </Card>
           <div className="mt-4">
             <Pagination page={result.page} totalPages={result.totalPages} limit={result.limit} />
           </div>

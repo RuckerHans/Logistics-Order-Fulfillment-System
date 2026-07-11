@@ -27,7 +27,7 @@ export function AutoRefreshToggle({ intervalMs = 5000 }: { intervalMs?: number }
         type="checkbox"
         checked={enabled}
         onChange={(e) => dispatch(autoRefreshEnabledSet(e.target.checked))}
-        className="h-3.5 w-3.5 rounded border-gray-300"
+        className="h-3.5 w-3.5 rounded border-gray-300 accent-indigo-600"
       />
       Auto-refresh ({Math.round(intervalMs / 1000)}s)
     </label>

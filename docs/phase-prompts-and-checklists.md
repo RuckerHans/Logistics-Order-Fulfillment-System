@@ -378,3 +378,55 @@ this phase is CSS/markup only, same restriction as Prompt 3.
 - Compare Orders, Order Detail, Analytics, and Fraud Flags side by side for consistency — a common failure mode here is polishing the page used as the example and leaving the other three untouched or inconsistent.
 - Confirm status badges are readable and distinguishable at a glance across all 7 states, not just whichever one was visible during development.
 - Confirm `ErrorState`/`EmptyState` still look visually consistent with the refreshed style, not left behind in the old flat look.
+
+**Status: DONE.** `devIndicators: false` confirmed correct for the exact installed version by reading shipped type definitions and the runtime config validator, not general knowledge — and confirmed error overlays still work by deliberately breaking a page and observing Next's real compile-error diagnostic, not just trusting docs. Visual refresh (muted gray-50 background, pill status badges, pill nav, hover states, consistent card treatment) applied across all pages and verified via live HTML from the container, not screenshots. Verdict from actually looking at it, though: still visually flat relative to what was wanted — see Prompt 5.
+
+## Prompt 5 — Bold visual richness pass
+
+**Constraint change, explicit and deliberate — this reverses a rule stated in every prompt before it:** Prompts 1–4 all said "no shadcn/ui, no new component library." That's lifted **for this phase only**, on request, because the muted/flat Prompt 4 result wasn't enough — shadcn/ui and `lucide-react` are now permitted. If a future session reads only Prompts 1–4 in isolation, this note is why Prompt 5 looks like it contradicts them; it doesn't, the constraint was intentionally changed here.
+
+**One line held constant despite the library change:** the existing Redux `ui` slice and `ToastHost` remain the actual state/logic — this phase restyles their visual output, it does not re-plumb state management that Prompts 1–2 already built and verified working.
+
+**Prompt:**
+```
+Constraint change from earlier prompts, explicit: shadcn/ui and new npm
+packages are now allowed for this phase specifically. Install shadcn/ui
+properly for this stack — Next.js 16.2.10, App Router, Tailwind v4 — confirm
+the CLI's Tailwind v4 compatibility mode is actually used (don't assume;
+check shadcn's own docs/changelog for v4 support and verify the generated
+config integrates with the existing tailwind setup without breaking it).
+Add lucide-react for icons.
+
+Direction: bold & vibrant. Anchor on a single saturated accent — an
+indigo-to-violet gradient (e.g. indigo-600 -> violet-600) for primary
+actions, active nav state, and a gradient banner behind page headers.
+High-contrast dark text on white/near-white surfaces, not muted gray-on-gray.
+Status colors stay semantically distinct but more saturated (vivid red,
+amber, blue, green — not pastel).
+
+Adopt shadcn primitives where they raise quality: Button (primary actions
+get the gradient fill), Badge (status pills), Card (table/content
+containers — can include a subtle colored top border or shadow-lg for
+real depth, not just border-gray), Table, Skeleton (for LoadingState).
+lucide-react icons in the nav (one icon per section), on primary buttons
+(+ for New Order, refresh icon that spins on pending), and inline with
+status badges.
+
+Keep the existing Redux ui slice and ToastHost exactly as the state
+mechanism — restyle Toast's visual appearance to match the new palette,
+but do not replace it with a shadcn/sonner-driven toast system. Same for
+RTK Query mutations and the orderForm slice: presentation-layer change
+only, zero logic/state-management changes.
+
+Apply consistently across Orders, Order Detail, Analytics, New Order, and
+Fraud Flags. Confirm after the restyle that order creation, transitions,
+error boundaries, and empty states (all built and verified in Prompts 1-4)
+still function identically — this phase must not regress any of that.
+```
+
+**Review checklist:**
+- Confirm shadcn's CLI actually detected/used Tailwind v4 mode (check the generated `components.json`/config, don't just assume the install succeeded silently).
+- Visual check across all 5 pages for consistency — same failure mode as before: one page gets the full treatment, others lag behind.
+- Functionally re-verify (not just visually): create an order, transition it, trigger an error boundary, trigger an empty state — all should work exactly as before, just look different.
+- Confirm `ToastHost` still reads from Redux `ui.toasts` — check the diff doesn't quietly introduce a second toast mechanism alongside it.
+- Check bundle size sanity — shadcn only pulls in the specific components you add, not a monolith; confirm `node_modules` growth looks like "a few components," not "an entire design system."

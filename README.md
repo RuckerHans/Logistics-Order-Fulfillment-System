@@ -1,356 +1,445 @@
-# Logistics Order Fulfillment System
+# Logistics Platform — Phase Prompts & Review Checklists (updated through Phase 2)
 
-A polyglot microservices demo built to close one specific gap: hands-on,
-production-shaped experience with the three message-queue technologies that
-show up constantly in backend interviews — Kafka, RabbitMQ, and BullMQ — all
-wired into one coherent domain (order fulfillment) instead of three
-disconnected toy demos.
+Each phase prompt below reflects lessons from Phases 0-2's actual bugs, not just the
+original plan. Review checklists focus on what a happy-path test can't catch — the
+same shape of bug that's turned up every phase so far: config that looks right but
+isn't wired, or logic that's correct in isolation but breaks under a real dependency
+(a join, a restart, a redelivery).
 
-Full design reference: [docs/project-plan.md](docs/project-plan.md).
-
-## Stack
-
-| Service | Framework | Role |
-|---|---|---|
-| `order-api` | NestJS + TypeORM | Order state machine, outbox, BullMQ jobs |
-| `inventory-service` | NestJS + TypeORM | Stock reservation (RabbitMQ), commit/release (Kafka) |
-| `notification-service` | NestJS + TypeORM | Customer notifications (RabbitMQ) |
-| `analytics-service` | NestJS + TypeORM | Order metrics (Kafka) |
-| `audit-service` | NestJS + TypeORM | Append-only compliance log (Kafka) |
-| `fraud-service` | FastAPI + SQLAlchemy/Alembic | Rule-based fraud flags (Kafka, Python — deliberately polyglot) |
-| `web` | Next.js (App Router) | Order placement + ops dashboards |
-
-Postgres (schema-per-service), Redis (BullMQ), a RabbitMQ-management image,
-and a 3-broker Kafka KRaft cluster round out the infra.
+**Standing instinct for every phase, not just BullMQ:** after Claude Code reports a
+phase "done," the first question is always "did you actually run this against the
+live stack, or just unit test it" — and the second is "does every queue/topic/table
+this touches have the same protections (retry, DLX, idempotency, grants) as the ones
+that already exist," since forgetting one of a matched set (the reply queue's retry
+policy, a second .failed DLQ) has been the single most common bug shape.
 
 ---
 
-## Prerequisites
+## Phase 0 — Scaffolding & contracts — DONE, committed
 
-- Docker Desktop (with Compose v2 — `docker compose`, not the standalone
-  `docker-compose` binary)
-- Node.js 20+ and npm 10+ (for running things outside Docker, e.g. `npm run
-  migration:generate` locally)
-- ~4GB of free RAM available to Docker — the full stack is 8 app containers
-  plus Postgres, Redis, RabbitMQ, 3 Kafka brokers, Kafka UI, and kafka-init
-- **If you're on Windows:** use WSL2, and clone/run the repo from inside the
-  WSL2 filesystem (`\\wsl$\...` or a native `/home/...` path), not from
-  `/mnt/c/...` — cross-filesystem bind mounts are dramatically slower and
-  more prone to the file-watcher issues in [Troubleshooting](#troubleshooting)
-  below.
+Reference only. Real bugs found: missing `KAFKA_LISTENER_SECURITY_PROTOCOL_MAP`/
+`KAFKA_CONTROLLER_LISTENER_NAMES`/`KAFKA_INTER_BROKER_LISTENER_NAME` (broker
+crash-loop), `kafka-init`'s YAML-folding bug masking a failed topic-create behind an
+unconditional `echo`, missing healthchecks. All fixed and verified via `--describe`,
+`psql \dn/\du/\ddp`, and a real `down -v && up` fresh-volume test.
 
 ---
 
-## Quickstart
+## Phase 1 — Order API core — DONE, committed
 
-```bash
-# 1. Install root + workspace dependencies
-npm install
-
-# 2. Bring up everything — infra and all app services — from scratch
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build
-
-# 3. Wait for every container to report healthy
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml ps
-```
-
-`postgres`, `redis`, `rabbitmq`, and all three `kafka-*` brokers have real
-healthchecks — every app service's `depends_on` waits on those, and on
-`kafka-init` having *completed* (it's a one-shot job that creates the
-`order.status_changed` topic with the right partition/replication config,
-then exits — `Exited (0)` is its correct, healthy end state, not a failure).
-
-```bash
-# 4. Run migrations (first time only, or after any docker compose down -v)
-for svc in order-api inventory-service notification-service analytics-service audit-service; do
-  docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec $svc npm run migration:run
-done
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec fraud-service alembic upgrade head
-
-# 5. Seed minimal test data (a customer + stock for two SKUs)
-docker compose -f infra/docker-compose.yml exec -T postgres \
-  psql -U postgres -d postgres < scripts/seed.sql
-```
-
-**6. Place a test order and watch it flow through the whole system:**
-
-Open http://localhost:3100/orders/new and submit:
-- Customer ID: `11111111-1111-4111-8111-111111111111` (from the seed script)
-- Delivery address / branch: anything
-- SKU: `SKU001`, qty: `1`, unit price: `100`
-
-You should land on the new order's detail page showing status `PLACED`.
-Within a few seconds (RabbitMQ round-trip), it should be reachable — refresh
-or enable auto-refresh — while its outbox events, reservation, and
-notification are all real, independently checkable rows:
-
-```bash
-ORDER_ID=<paste the order ID from the URL>
-
-docker compose -f infra/docker-compose.yml exec postgres psql -U postgres -d postgres -c "
-SELECT status FROM order_api.orders WHERE id = '$ORDER_ID';
-SELECT channel, routing_key, published_at IS NOT NULL AS published FROM order_api.outbox WHERE aggregate_id = '$ORDER_ID';
-SELECT sku, status FROM inventory.reservations WHERE order_id = '$ORDER_ID';
-SELECT type, channel, status FROM notification.notification_log WHERE order_id = '$ORDER_ID';
-"
-```
-
-Then try `PATCH http://localhost:3000/orders/$ORDER_ID/transition` with
-`{"newStatus":"PAYMENT_CONFIRMED"}` (or use the button on the order detail
-page) and watch `analytics.order_status_events` and `audit.order_status_log`
-each pick up a new row, and `fraud.order_events`/`fraud.flagged_orders`
-correctly *not* grow (Fraud Service only evaluates rules at `PLACED`).
-
-| Endpoint | URL |
-|---|---|
-| Web UI | http://localhost:3100 |
-| Order API | http://localhost:3000 |
-| Analytics API | http://localhost:3003 |
-| Fraud API | http://localhost:8005 |
-| Kafka UI | http://localhost:8080 |
-| RabbitMQ management | http://localhost:15672 (guest/guest) |
-| Bull Board | http://localhost:3000/admin/queues |
+Reference only. Real bug found: TypeORM's migration table defaulted to `public`
+schema, which `order_api_migrator` has no `CREATE` on (Postgres 15+ default). Fixed
+via `schema: 'order_api'` on the DataSource.
 
 ---
 
-## Directory structure
+## Phase 2 — Transactional outbox, RabbitMQ, business logic — DONE, committed
 
-```
-apps/
-  order-api/            # NestJS — state machine, outbox, BullMQ jobs, reply-queue consumer
-  inventory-service/    # NestJS — RabbitMQ reserve/release, Kafka commit/release consumer
-  notification-service/ # NestJS — RabbitMQ notify consumer
-  analytics-service/    # NestJS — Kafka consumer + read API
-  audit-service/        # NestJS — Kafka consumer, append-only log
-  fraud-service/        # FastAPI — Kafka consumer, rule engine, read API
-  web/                  # Next.js — dashboard (Server Components + Route Handler proxies)
-packages/
-  contracts/            # Shared TS types, zod schemas, contract-drift fixtures
-infra/
-  docker-compose.yml       # Infra only: postgres, redis, rabbitmq, kafka x3, kafka-ui, kafka-init
-  docker-compose.dev.yml   # App services, extends the above
-docs/
-  project-plan.md              # Full design reference — read this for the "why" behind everything
-  phase-prompts-and-checklists.md  # Build-phase prompts/checklists used during development
-  init.sql                     # Bootstrap: schemas + two-tier roles/grants only, no tables
-scripts/
-  seed.sql               # Minimal test data for local dev
-```
+Reference only. Real bugs found: outbox poller reentrancy (`@Interval` overlap →
+47 duplicate messages), `trace_id` missing from `orders` table, Docker build context
+broken for npm workspace siblings, `@Global()` NestJS export trap, `FOR UPDATE` +
+`LEFT JOIN` Postgres restriction, reply queue missing retry/DLX topology entirely
+(confirmed via a real 85341-redeliver busy loop, not hypothetical).
 
 ---
 
-## Running migrations
+## Phase 3 — BullMQ
 
-Every service has two Postgres roles: `<service>_migrator` (can `CREATE
-TABLE`, used only for migrations) and `<service>_app` (day-to-day runtime
-connection, cannot alter schema). Migrations are never run automatically on
-service boot — always an explicit step:
+**Prompt:**
+```
+Implement the three BullMQ jobs (Section 5.5, 17) in order-api: payment-timeout,
+delivery-reminder, generate-invoice-pdf. Read trace_id from the order row (added
+to order_api.orders during Phase 2) rather than generating a new one — reuse it
+in whatever event/log each job produces. Jobs that transition an order must call
+the existing OrdersService.transition() (the transactional, row-locked version
+from Section 17/Phase 2) — don't write a separate transition path for jobs.
 
-```bash
-# Any single NestJS service
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec order-api npm run migration:run
+Wire Bull Board per Section 15, mounted in order-api's existing container (Redis
+connection and port are already configured in docker-compose.dev.yml — no compose
+changes should be needed).
 
-# Generate a new migration after changing a TypeORM entity (run locally, not in the container)
-cd apps/order-api && npm run migration:generate -- src/database/migrations/DescriptiveName
-
-# Fraud Service (Alembic)
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec fraud-service alembic upgrade head
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec fraud-service alembic revision --autogenerate -m "description"
+After implementing, actually exercise each job against the live stack, not just
+unit tests: enqueue a payment-timeout with a short delay and confirm it correctly
+no-ops if the order already moved past PLACED, and correctly cancels if it
+hasn't; confirm delivery-reminder and generate-invoice-pdf fire and produce
+real output (a logged reminder, an actual PDF file) rather than just asserting
+the job was scheduled.
 ```
 
-A full `docker compose down -v` wipes both the Postgres volume and every
-RabbitMQ/Kafka queue and topic — re-run the migration and seed steps above
-after one.
+**Review checklist:**
+- Enqueue `payment-timeout`, manually confirm payment before it fires — does it correctly no-op, not cancel a paid order?
+- Enqueue `payment-timeout`, let it fire naturally on an unpaid order — does the order actually transition to `CANCELLED` through the real `OrdersService.transition()` (check logs/DB for the row lock path), not a shortcut?
+- Open Bull Board (`/admin/queues`) — can you see real job states, not just that the route mounts?
+- Check that every job's log line/event actually carries the `trace_id` read from the order row, not a freshly generated one — grep for two different `trace_id`s on the same order if in doubt.
+- Confirm `generate-invoice-pdf` produces an actual file, not just a "job completed" log.
+- Ask Claude Code directly: does calling `transition()` from a BullMQ processor hit the same row-locking code path as the HTTP endpoint and the reply-queue consumer, or did a fourth call site quietly diverge?
 
 ---
 
-## Common commands
+## Phase 4 — Kafka: outbox already exists, this phase is the four consumers — DONE, committed
 
-```bash
-# Logs for one service, following
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml logs -f order-api
+Reference only. Real bugs found: `fraud.order_events`'s Kafka consumer task died silently ~1.5s after startup (DB insert failed pre-migration, `asyncio.create_task` swallowed the exception, zero log evidence) — fixed with a supervisor loop plus `enable_auto_commit=False`/manual commit, since default auto-commit is at-most-once and could silently lose a message rather than merely redeliver one. Also found: Section 19.1 prescribed a `new_status` column on `fraud.order_events` that Section 13's DDL never gave it — corrected to `UNIQUE (order_id)` alone.
 
-# Rebuild + restart just one service after a code change (most services also
-# hot-reload via the bind mount — this is for when that's not enough)
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build order-api
+**Prompt:**
+```
+Implement Kafka consumers for four services, each its own consumer group per
+Section 5.2's registry:
 
-# Run one service's tests locally (outside Docker)
-cd apps/order-api && npm test
+- inventory-service: consumes order.status_changed, reacting to PAYMENT_CONFIRMED
+  (commit reservation) and CANCELLED (release reservation) per Section 19.1's
+  commitReservation/release logic — this does NOT already exist; Phase 2 only
+  built the RabbitMQ side (reserve_stock, notify, reply-queue consumer). Every
+  other status must be consumed (offset advances) but no-op.
+- analytics-service and audit-service: consume and persist per Section 13's
+  tables, idempotent via ON CONFLICT DO NOTHING on (order_id, new_status)
+- fraud-service (FastAPI + aiokafka): the rule engine from Section 6, with
+  RELEVANT_STATUSES scoped to PLACED only — every other status consumed but
+  no-op before touching the rule engine or database
 
-# Run the whole test suite across every workspace
-npm test --workspaces --if-present
+Check docs/init.sql against Section 13 for sequence grants on every BIGSERIAL
+table this phase touches (analytics.order_status_events, audit.order_status_log,
+fraud.order_events, fraud.flagged_orders) — confirm they're present, don't
+assume.
 
-# Full teardown, including volumes (Postgres data + all queues/topics)
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml down -v
+After implementing, verify against the live stack: publish a duplicate
+order.status_changed event manually and confirm each of the four consumers
+produces exactly one effect, not two — including Inventory, where "effect"
+means the reservation's status column changes exactly once, not that a row
+was inserted twice. Confirm Fraud Service's logs show it explicitly skipping
+rule evaluation on non-PLACED transitions. Confirm Inventory's commit/release
+correctly no-ops on a redelivered event when the reservation is already in the
+target state (COMMITTED/RELEASED), per Section 19.1.
 ```
 
----
-
-## Troubleshooting
-
-**`fraud-service` (or any service using `--reload`/`--watch`) crashes with
-"Cannot allocate memory" once everything is running together.** This is a
-shared-inotify-watch-budget exhaustion inside Docker Desktop's WSL2 VM once
-6+ file watchers (5 NestJS `--watch` processes, Next.js's dev server, and
-Alembic's own watcher) are all running concurrently. `fraud-service`'s
-`docker-compose.dev.yml` entry already sets `WATCHFILES_FORCE_POLLING=true`
-to work around it — if you hit an equivalent crash on another service, the
-same fix (force polling instead of inotify) applies.
-
-**`curl http://localhost:PORT` hangs indefinitely, but the service is
-clearly running.** A known IPv6 loopback port-forwarding quirk in Docker
-Desktop/WSL2 — `curl` resolves `localhost` to `::1` first and hangs. Use
-`http://127.0.0.1:PORT` explicitly instead.
-
-**A freshly placed test order immediately shows `CANCELLED`.** This means
-`inventory.stock` has no row (or zero `available_qty`) for the SKU you
-used — the reservation genuinely failed as `INSUFFICIENT_STOCK` and Order
-API correctly auto-cancelled it. Run `scripts/seed.sql` (or insert stock for
-your SKU directly) before testing.
-
-**Editing a change in `packages/contracts` doesn't seem to take effect
-inside a running container.** The contracts package is consumed via its
-compiled `dist/` output, not its TypeScript source — a bind mount makes the
-source visible inside the container, but nothing recompiles it
-automatically. Run `npm run build --workspace=@logistics/contracts` on the
-host, then `docker compose restart <affected-service>` (a restart is enough;
-a full `docker compose build` is only needed if you changed a *dependency*
-of the contracts package, not its own source).
-
-**`apps/web` starts throwing plain-text `Internal Server Error` (not JSON)
-on every request, or the container logs show `TurbopackInternalError:
-Failed to restore task data (corrupted database or bug)`.** `infra-web-1`
-bind-mounts `apps/web`, and its live `next dev` process keeps an open
-Turbopack persistent cache database under `apps/web/.next/dev/cache/`. Any
-host-side command that touches that same `.next` directory while the
-container is running — `rm -rf apps/web/.next`, or running `next build` on
-the host against the same workspace — can corrupt that cache mid-write,
-since both processes see the identical files through the bind mount. Fix:
-`rm -rf apps/web/.next` once more to fully clear the corrupted cache, then
-`docker compose restart web` to let it regenerate cleanly. To avoid it: run
-build/clean commands for `apps/web` only inside the container (or stop
-`infra-web-1` first) while it's up.
-
-**A newly created file inside a bind-mounted service directory doesn't
-seem to load, even though editing an existing file triggers a rebuild
-fine.** Turbopack's file watcher can miss a brand-new file over a Docker
-bind mount in a way it doesn't miss edits to files it's already watching.
-If a new component/route isn't picking up, try touching an existing file
-in the same directory to force a rebuild, or restart the container.
+**Review checklist — this is the highest-stakes phase remaining, budget the most review time here:**
+- Re-publish the same `order.status_changed` event twice manually (or force outbox redelivery) — does Audit end up with exactly one row? Does Fraud skip re-flagging?
+- **Inventory's commit/release is new work this phase, not a confirmation pass** — verify it actually exists as real code before verifying it's correct. Check: does a `PAYMENT_CONFIRMED` event actually flip a `RESERVED` reservation to `COMMITTED`, and does `CANCELLED` flip it to `RELEASED`? Publish the same event twice — does the reservation's status column change once, or does the second delivery error/duplicate?
+- Check Fraud Service's logs directly — does it explicitly skip on `PAYMENT_CONFIRMED`/`PICKING`/etc., or does the `RELEVANT_STATUSES` filter only exist in a comment and not the actual code path?
+- `docker stop kafka-2` mid-flow, place an order — does it still succeed? This is the actual test of whether `min.insync.replicas=2` + `acks=all` deliver what Section 8.3 claims, not just narration.
+- Check kafka-ui's consumer groups view — are `analytics-service`, `fraud-service`, `audit-service`, `inventory-service` genuinely four **distinct** groups? (This is exactly the kind of thing that silently breaks if a copy-pasted config keeps the same group ID.)
+- Confirm the Fraud Service's Postgres role (`fraud_app`) actually has the sequence grant it needs before assuming an insert works — this is the same class of bug as the `order_api.outbox` sequence-grant gap found in planning, now worth confirming it didn't slip through for Fraud/Analytics/Audit's own `BIGSERIAL` tables.
+- Ask directly: does the Fraud Service's Alembic migration match Section 13's DDL the same way order-api's TypeORM migration was checked line-by-line back in Phase 1? Don't let the second language get a lighter review than the first.
 
 ---
 
-## Why three different queues, not one
+## Phase 5 — Frontend — DONE, committed
 
-Each broker is used for the kind of work it's actually good at — this is the
-core architectural idea of the whole project, not an incidental choice:
+Reference only. Real bugs found: `GET /orders` existed since Phase 1 but had zero pagination and zero test coverage; Analytics Service's actual REST API status contradicted an earlier claim (flagged rather than silently resolved either way); stale 274MB `.next/` bloating the Docker build context; port-convention mismatch (hardcoded `3100` instead of respecting `$PORT`); container-hostname vs. `localhost` mismatch in the subagent's own sandboxed verification, caught and fixed by the human review pass specifically because that's the one thing a sandboxed build can't check.
 
-- **RabbitMQ — task distribution.** `reserve_stock` and `notify` are
-  one-shot commands with exactly one intended handler and a natural
-  request/reply shape (Inventory Service replies to Order API's own reply
-  queue with a reservation result). Each queue gets an explicit 3-stage TTL
-  retry topology (1s / 5s / 15s) plus a terminal DLQ, and the *consumer*
-  decides the next retry stage by inspecting delivery headers
-  (`getNextRetryTarget`) rather than relying on a passive nack → DLX bounce.
-  That was a deliberate choice made after finding, live, that a bare
-  `channel.nack(msg, false, true)` on a persistently-failing message just
-  busy-loops with no backoff at all — there's no delay from a same-queue
-  requeue.
+---
 
-- **Kafka — durable, replayable event log.** `order.status_changed` has
-  four independent consumers (`analytics-service`, `fraud-service`,
-  `audit-service`, `inventory-service`) that each need their own full,
-  ordered view of every status change, replayable from any offset. That's a
-  fan-out shape RabbitMQ queues don't give you for free — a queue drains
-  once, a Kafka partition can be re-read by any number of independent
-  consumer groups. Producers use `acks=all`; the topic runs replication
-  factor 3 with `min.insync.replicas=2`.
+## Phase 6 — Polish
 
-- **BullMQ — internal scheduled/delayed jobs.** `payment-timeout`,
-  `delivery-reminder`, and `generate-invoice-pdf` are Order API's own
-  internal deferred work, not cross-service communication — there's no
-  reason to pay Kafka's or RabbitMQ's operational weight for a job that
-  fires once, 15 minutes from now, and is only ever consumed by the same
-  service that scheduled it. Redis-backed BullMQ with the Bull Board admin
-  UI is the right-sized tool here.
+**Prompt:**
+```
+Wire the full CI pipeline (Sections 16, 18, 19.3):
 
-Every message and job payload carries a `trace_id`, generated once at order
-placement and propagated through every hop — Kafka events, RabbitMQ
-messages, and BullMQ job payloads alike — so a single order's path through
-the whole system is greppable end to end.
+- Add web to build-docker-images' matrix — it's missing entirely from Section 16,
+  since that section predates Phase 5. Confirm whether web has a real test script
+  (tsc + eslint at minimum) before adding it to test-node-services too — if it
+  doesn't have one yet, add a minimal one rather than either skipping it from CI
+  or letting the matrix job fail on a missing script.
+- Confirm analytics-service and audit-service's --passWithNoTests handling lives
+  in each service's own package.json test script, not as a CI-only override —
+  otherwise the generic per-service test command in the matrix breaks for them.
+- Add contract-drift-test to build-docker-images' needs: list — confirm this
+  literally by reading the actual YAML, don't just state it. This exact gap
+  (the fix described in prose without the YAML actually reflecting it) slipped
+  through once already in the plan doc itself.
 
-## Reliability patterns
+Before writing the README, bring up the ENTIRE stack in one shot — all infra
+plus all 7 backend services plus web — from a fresh `down -v`. Every phase so
+far has only brought up the subset it needed; this is the first time everything
+runs together, and it's worth finding out now if anything about that combination
+doesn't hold up.
 
-**Transactional outbox.** Order API never publishes to Kafka or RabbitMQ
-directly inside a request handler. Every state-changing operation writes a
-row to `order_api.outbox` (with a `channel` column distinguishing
-`kafka`/`rabbitmq`) in the *same* database transaction as the domain write,
-and a separate `OutboxPollerService` ticks every second, picks up
-unpublished rows, and publishes them. This is what makes "the DB write
-succeeded but the event never went out" structurally impossible — the event
-either commits with the order or the whole transaction rolls back. The
-poller has an `isPolling` reentrancy guard, added after finding, live, that
-a single slow Kafka publish (~20s) let ticks pile up concurrently and each
-one independently re-published the same still-unpublished row — 47 duplicate
-publishes from one order. Every consumer is expected to be idempotent on top
-of this anyway (`UNIQUE(order_id, new_status)` with `ON CONFLICT DO NOTHING`
-on the Kafka side), because outbox delivery is at-least-once by design, not
-exactly-once.
+Write the README with the "why RabbitMQ / Kafka / BullMQ" rationale section,
+covering what's actually true of this implementation (including the testing
+philosophy — why analytics/audit have no dedicated unit tests, the migrator/app
+role split, the outbox pattern) — not just the original plan's intent. Also
+explicitly address the deferred AWS/Terraform question: state plainly that this
+project is local-only and why, rather than leaving it unmentioned.
+```
 
-**Two Postgres roles per service.** Every service schema has a
-`<service>_migrator` role (`USAGE + CREATE`, used only to run migrations)
-and a `<service>_app` role (`USAGE` only, what the running service actually
-connects as). `ALTER DEFAULT PRIVILEGES FOR ROLE <service>_migrator` means
-any table *that role* creates automatically grants the app role the right
-DML — no manual re-grant per migration. The app role structurally cannot
-`CREATE TABLE`, `DROP TABLE`, or otherwise touch schema shape, even if the
-running service is compromised or has a bug. No foreign keys ever cross
-schemas — each service owns its own data outright, and cross-service
-consistency is handled by the messaging layer, not the database.
+**Review checklist:**
+- Read the actual `needs:` list in the committed YAML yourself — don't accept a summary that says it's wired.
+- Confirm `web` is genuinely in `build-docker-images`, and that whatever test script it has (if any) actually runs and passes in CI, not just locally.
+- Deliberately break something the contract-drift test should catch (remove a Pydantic constraint) and push it — does CI actually go red, and does that red block the build?
+- The full-stack `down -v && up` — did it actually succeed with zero manual intervention, or did something need a restart/reorder that should be reflected in a healthcheck/`depends_on` fix rather than papered over?
+- Read the README's rationale section yourself — could you defend every sentence in an interview without looking anything up? If a sentence describes something that isn't quite how it ended up being built (the outbox timing, the reply queue's retry policy, the two-tier role model), fix the README, don't leave the aspirational version in.
+- Confirm the AWS/Terraform decision is explicitly stated in the README, not silently absent.
 
-**Migrations are never automatic.** No service runs migrations on boot.
-They're a separate, explicit step (`npm run migration:run` per NestJS
-service, `alembic upgrade head` for Fraud Service) run against the
-`_migrator` role. Tying schema changes to process boot means a bad
-migration takes down every replica simultaneously on deploy; keeping it
-explicit means it can be reviewed, staged, and rolled back independently of
-application code.
+**Status: DONE, committed.** Real bugs found: CI's contract-drift-test job existed only in prose before this phase (never spliced into the actual YAML); all 5 NestJS services were missing ESLint configs since Phase 1 (uncaught because no CI existed to run lint until now); the RabbitMQ setup race (amqp-connection-manager's concurrent `addSetup` callbacks racing a queue's own assertion — masked in every prior phase by RabbitMQ queues persisting across dev sessions that never got `down -v`'d, only surfaced on the first-ever full-stack boot); fraud-service's `--reload` crashing under WSL2's shared inotify budget (fixed via `WATCHFILES_FORCE_POLLING`). README expanded into a full guide with a seed script (`scripts/seed.sql`) closing the previously-flagged unscripted-test-data gap. AWS/Terraform section intentionally left as-is pending separate work.
 
-## Testing philosophy
+---
 
-Most services have real unit test suites — NestJS's order state machine,
-RabbitMQ retry-routing logic, and Fraud Service's rule engine all have
-meaningful branching logic worth covering. `analytics-service` and
-`audit-service` deliberately don't: both are a Kafka consumer whose entire
-job is one `INSERT ... ON CONFLICT DO NOTHING` query-builder chain per
-event. A unit test for that would either mock the TypeORM repository (in
-which case the test verifies the mock was called correctly, not that the
-row lands in Postgres) or stand up a real database (at which point it's an
-integration test wearing a unit test's clothes, and slower to boot for no
-extra signal). Their actual correctness question — "does a duplicate
-Kafka delivery produce one row, not two?" — was verified live instead: by
-publishing the same event twice and checking the row count, not by
-asserting a mock was called. Both services do have a real, working
-`"test": "jest --passWithNoTests"` script in their own `package.json` (not
-a CI-only override), so CI's generic per-service test command doesn't
-special-case them.
+## Frontend Improvement Plan (post-Phase 6)
 
-## Local-only, deliberately
+Scope: improve the existing Next.js app in place — no shadcn/ui, no replacing Tailwind, no migrating Server Component reads to client-side fetching. Adds Redux Toolkit for client state (toasts, auto-refresh preference, order form draft) and RTK Query for exactly two mutations (create order, transition order). Sequenced as three independently-reviewable prompts rather than one large one, since the riskiest decisions (Client/Server component boundaries, where RTK Query actually points) are cheapest to catch early.
 
-This project does not deploy to AWS and has no Terraform. That's a
-deliberate scope decision, not an oversight: the entire point of the
-project is hands-on depth with Kafka/RabbitMQ/BullMQ message-passing
-semantics, not cloud infrastructure-as-code — a skill area better
-demonstrated by a separate, dedicated project than bolted onto this one for
-completeness. `docker-compose.yml` (infra) + `docker-compose.dev.yml` (app
-services) is the full deployment target. If this ever needs to run
-somewhere other than a laptop, that's a new project, not a Phase 7.
+**Two risks worth stating explicitly before Prompt 1, since they're easy to get subtly wrong:**
+1. RTK Query must call the existing same-origin Route Handler proxies (`/api/orders`, `/api/orders/:id/transition`) — not backend container hostnames, which the browser cannot resolve.
+2. Only the specific interactive leaf components (the new-order form, the transition buttons) should become Client Components — not the surrounding pages. A common failure mode is one interactive button forcing `'use client'` onto an entire page, silently undoing Phase 5's SSR architecture.
+3. `router.refresh()` after a successful transition only shows fresh data if the order-detail page's server-side fetch uses `cache: 'no-store'` (or equivalent) — confirm this rather than assume it.
 
-## CI
+### Prompt 1 — Foundation: Redux store, reusable components, error boundaries
 
-`.github/workflows/ci.yml` runs, in dependency order: lint + unit tests per
-service (matrix over all 7 `apps/*`, including `web`'s `tsc` typecheck) →
-Fraud Service's pytest suite → a contract-drift test that validates the same
-canonical `order.status_changed` fixture against both the Zod schema (TS)
-and the Pydantic model (Python) → a Docker build verification matrix over
-all 7 services, gated on the first three jobs passing.
+**Prompt:**
+```
+Add Redux Toolkit + React Redux to apps/web without touching backend services
+or migrating any read page to client-side fetching.
+
+Store setup:
+- Redux store, a client-component Provider wrapper (Redux's <Provider> cannot
+  go directly in the root layout.tsx, since that's a Server Component by
+  default — create a dedicated providers.tsx with 'use client' that wraps
+  {children}, and use that in layout.tsx).
+- Typed useAppDispatch/useAppSelector hooks.
+- ui slice: toasts (array, each with id/type/message), autoRefreshEnabled
+  (boolean), lastError (string | null).
+- orderForm slice: customerId, deliveryAddress, branchId, items (array of
+  {sku, qty, unitPrice}), validationErrors, plus a reset action.
+
+Reusable components (plain Tailwind, no shadcn/ui, no new UI library):
+- ErrorState: title, message, optional actionLabel/onAction. No stack
+  traces, file paths, or error.digest ever rendered to the user.
+- LoadingState: simple, reusable loading indicator.
+- ToastHost: reads ui.toasts from Redux, renders success/error/info toasts,
+  each dismissible and auto-dismissing after ~4s via a per-toast timeout
+  with cleanup on unmount (not a shared interval). Mount once, e.g. in
+  providers.tsx.
+- PageHeader: title + optional right-aligned actions slot.
+
+Error boundaries — use Next.js App Router's actual error.tsx convention
+(required to be a Client Component), not a custom mechanism:
+- apps/web/app/orders/error.tsx
+- apps/web/app/orders/[id]/error.tsx
+- apps/web/app/analytics/error.tsx
+Each renders ErrorState with a clean message, and calls the reset() function
+Next.js provides as the retry action. error.digest is fine to console.error
+for debugging but must never render in the UI.
+
+Do not wire any of this into the order form or transition buttons yet —
+that's the next phase. This phase is infrastructure only, and should be
+independently verifiable: the app should build, the toast host should be
+mountable with a manually-dispatched test toast, and each error.tsx should
+be triggerable (e.g. by temporarily throwing in the relevant page) and show
+a clean message with a working retry.
+```
+
+**Review checklist:**
+- Confirm `<Provider>` is in a dedicated `'use client'` file, not pasted directly into `layout.tsx` (which would either error or force the whole layout client-side).
+- Manually dispatch a toast and confirm it auto-dismisses and cleans up its timeout on unmount (navigate away before the timeout fires — no console warning about a state update on an unmounted component).
+- **Also confirm dismiss-before-timeout cleanup, not just unmount cleanup** — click a toast's close button before its auto-dismiss timer fires, then wait past the timeout and confirm nothing errors trying to dismiss an already-gone toast. Found worth adding after Prompt 1's actual testing — dismiss and auto-dismiss need to share one cleanup path, not two independent ones.
+- Temporarily throw inside each of the three pages and confirm: the error.tsx catches it, shows a clean message, `reset()` actually retries rendering, and nothing resembling a stack trace/file path/digest appears in the rendered output.
+- Confirm the rest of the app (order list, detail, analytics reads) still renders via Server Components exactly as before — this phase should change zero read behavior.
+
+**Status: DONE.** All checks confirmed by actual runtime testing (not code inspection alone): `<Provider>` correctly isolated in `providers.tsx`; toast auto-dismiss, manual dismiss, and unmount cleanup all verified with no stale-timer warnings; all three error boundaries caught forced throws, `reset()` re-rendered cleanly, no stack/digest/file path leaked into rendered output; Server Component read behavior confirmed unchanged. Verification technique worth carrying forward: throws were triggered via a **temporary client child component**, not by adding `'use client'` to the page itself — this is the correct way to test without accidentally invalidating the thing being tested (a page-level `'use client'` would silently break the Server Component architecture the test is supposed to confirm stayed intact).
+
+### Prompt 2 — Feature wiring: RTK Query, form migration, transitions, auto-refresh
+
+**Testing technique carried forward from Prompt 1 — use this again here:** when testing the transition buttons and order form, verify their Client Component boundary is exactly as narrow as intended (the button/form itself, not the surrounding page) the same way Prompt 1 verified error boundaries — a temporary client child/test harness, not by converting the page itself to `'use client'` to make testing easier.
+
+**Prompt:**
+```
+Wire the Redux foundation from the previous phase into real functionality.
+
+RTK Query — createOrder and transitionOrder mutations only. baseUrl must be
+the existing same-origin Route Handler proxies (/api/orders,
+/api/orders/:id/transition) — NOT the backend container hostnames, which
+cannot resolve from the browser. Confirm this by checking network requests
+in the browser, not just reading the code.
+
+Order form (apps/web/app/orders/new — this page's form becomes a Client
+Component; the surrounding route can stay as minimal a shell as possible):
+- Move draft state (customerId, deliveryAddress, branchId, items) from
+  local useState into the orderForm Redux slice.
+- Validation errors stay visible and readable, sourced from the slice.
+- Disable submit while the createOrder mutation is pending.
+- On success: show a success toast, dispatch orderForm's reset action, then
+  navigate to the new order's detail page (in that order — reset before
+  navigating away, not after, so there's no stale-form flash if navigation
+  is slow).
+- On failure: show an error toast (or inline error, whichever reads better
+  for the failure) with the actual backend message, not a generic string.
+
+Order transitions (order detail page's status-change buttons — these
+buttons become a small Client Component; the rest of the page stays server-
+rendered):
+- Use the transitionOrder mutation's pending/error state to disable buttons
+  during the request.
+- Success: toast, then router.refresh() (from next/navigation) so the
+  Server Component re-fetches and shows the new status. Before assuming
+  this works, confirm the order-detail page's server-side fetch actually
+  uses cache: 'no-store' (or equivalent) — if it doesn't, router.refresh()
+  may silently re-render the same cached response instead of fresh data.
+- Failure: clean error toast with the actual backend error message (Order
+  API already returns specific 400 messages for invalid transitions — surface
+  that, not a generic "something went wrong").
+
+Auto-refresh: move the enabled/disabled preference into ui.autoRefreshEnabled,
+shared across every page that currently has its own local auto-refresh
+toggle, so toggling it on one page is reflected on others. Keep the actual
+refresh mechanism (however it currently polls/refetches) unchanged — only
+the on/off state moves to Redux.
+```
+
+**Review checklist:**
+- Open browser devtools' Network tab while creating an order — confirm the request actually goes to `/api/orders` (same-origin), not `order-api:3000` or `localhost:3000` directly.
+- Confirm the order-detail page's fetch has `cache: 'no-store'` (or a revalidate setting short enough to matter) — transition an order, click confirm, and verify the displayed status actually changes without a manual page reload.
+- Force a transition that the backend will reject (e.g. `PLACED` → `SHIPPED` directly) and confirm the toast shows the real backend message, not a generic error.
+- Toggle auto-refresh on one page, navigate to another page that also has it, and confirm the toggle state carried over.
+- Confirm only the form/button components are `'use client'` — check that the order list and detail pages' main content still renders without a client-side loading flash on first load (a sign something got accidentally converted to client-side fetching).
+
+### Prompt 3 — Responsive/UI polish
+
+**Note before starting — this phase cannot be self-verified by Claude Code.** Everything in this prompt is visual/layout work with no headless-browser or screenshot tool available to confirm it, the same limitation honestly flagged for the Recharts rendering check back in Phase 5. Claude Code can build, lint, and describe what the CSS *should* do, but "does it actually look right at phone width" is a human check, not something to expect a "verified" claim about from the agent's own output.
+
+**Prerequisite:** run `scripts/seed.sql` and place at least one real test order first (per the Quickstart) — several of this phase's checks (long-UUID truncation, a populated table wrapping correctly) are untestable against an empty database.
+
+**Prompt:**
+```
+Polish only — no new functionality, no Redux changes.
+
+- Tables (orders list, fraud flags): wrap in a horizontally-scrollable
+  container on narrow viewports rather than squeezing columns.
+- Long UUIDs (order IDs, customer IDs, trace IDs): truncate with ellipsis
+  and a title attribute (or copy-to-clipboard) rather than overflowing or
+  wrapping mid-character.
+- Buttons (transition actions, filters): wrap cleanly (flex-wrap) on small
+  screens instead of overflowing or forcing horizontal scroll on the whole
+  page.
+- Keep existing card/panel sizing compact — no new padding/spacing scale.
+- Add a clean empty state (using the new LoadingState/ErrorState-adjacent
+  pattern, or a simple centered message) anywhere a page can legitimately
+  have zero data (empty order list, no fraud flags, no analytics data yet)
+  — some of this may already exist from Phase 5, don't duplicate it.
+
+This is CSS/layout work — it should not require any new 'use client'
+components. If an empty state genuinely needs interactivity (unlikely),
+verify its Client/Server boundary the same way Prompt 1 and 2 did: a
+temporary client child for testing, never by converting the page itself.
+
+Do not introduce shadcn/ui or any new component library. Do not touch
+backend services.
+```
+
+**Review checklist (human-verified — resize an actual browser, don't take a "looks correct" claim at face value):**
+- Resize the browser to a phone width and check: does the orders table scroll horizontally instead of squishing, do transition buttons wrap instead of overflowing, do long IDs truncate cleanly?
+- Confirm empty states render correctly for a genuinely empty result (e.g. filter fraud flags by a nonexistent order ID) rather than an empty table with just headers.
+- Confirm no page picked up an unnecessary `'use client'` directive as a side effect of this phase's changes.
+
+**Status: DONE.** Fixed the whole-page horizontal scroll at its actual source (`NavBar.tsx`'s `flex-wrap`, not called out explicitly in the original brief but correctly caught as the real root cause affecting every page). Tables, long-UUID truncation (fixed a `break-all` that was actively violating the no-mid-character-wrapping requirement), button/filter wrapping, and empty states all verified against real seeded data, not assumed. Two more `.next`/Turbopack bind-mount collisions hit and self-recovered during verification — same documented failure mode from Phases 2, both times correctly diagnosed and fixed without needing to re-derive the cause.
+
+## Prompt 4 — Remove dev indicator + visual design refresh
+
+**Note:** this project is on Next.js 16.2.10 — newer than general training knowledge should be trusted for config syntax. The `devIndicators` config shape has changed across Next versions; confirm against this exact version's docs before assuming the syntax below is still current if revisiting this later.
+
+**Prompt:**
+```
+Two independent changes, no functional/behavior change to either:
+
+1. Remove the floating Next.js dev-mode indicator (the circular badge
+   bottom-left in every page). This project is on Next.js 16.2.10 — set
+   devIndicators: false in apps/web/next.config.ts. Confirm this is the
+   correct config key for this exact version by checking the installed
+   Next.js version's own docs/changelog, not assumed from general knowledge,
+   since this config has changed shape across Next versions. Confirm
+   compile/runtime error overlays still appear after this change (Next's
+   own docs state they should) — deliberately break something and check.
+
+2. Visual design refresh — Tailwind only, still no shadcn/ui, no new
+   component library, no new dependencies. Current look is functionally
+   correct but visually flat (plain white background, thin unstyled table,
+   no hover states, nav using only bold+underline for active state).
+   Target direction: muted page background (bg-gray-50 or similar) with
+   white bordered cards (border + rounded-lg, not heavy box-shadow) for
+   the table/content containers; status shown as a colored pill/badge
+   (rounded-full, colored bg + text, not just a colored dot) — Cancelled
+   red, Placed blue/gray, Payment Confirmed/Picking/Packed/Shipped in a
+   progressing color scheme, Delivered green; table rows get a subtle
+   hover background; header/page titles get clearer typographic hierarchy
+   (bold dark heading, muted gray secondary metadata like timestamps);
+   nav gets a pill or underline-on-active treatment distinct from inactive
+   links, not just font-weight.
+
+Apply consistently across Orders, Order Detail, Analytics, and Fraud
+Flags — this is a global style pass, not a one-page mockup. Reuse the
+existing ErrorState/LoadingState/EmptyState/PageHeader components' visual
+language rather than introducing a second, inconsistent style alongside
+them.
+
+Do not touch backend services, Redux logic, or data-fetching behavior —
+this phase is CSS/markup only, same restriction as Prompt 3.
+```
+
+**Review checklist (human-verified — same caveat as Prompt 3, Claude Code cannot see this):**
+- Confirm the dev indicator is actually gone on every page (not just the one it happened to be tested on), and that a deliberately-broken build still shows Next's error overlay.
+- Compare Orders, Order Detail, Analytics, and Fraud Flags side by side for consistency — a common failure mode here is polishing the page used as the example and leaving the other three untouched or inconsistent.
+- Confirm status badges are readable and distinguishable at a glance across all 7 states, not just whichever one was visible during development.
+- Confirm `ErrorState`/`EmptyState` still look visually consistent with the refreshed style, not left behind in the old flat look.
+
+**Status: DONE.** `devIndicators: false` confirmed correct for the exact installed version by reading shipped type definitions and the runtime config validator, not general knowledge — and confirmed error overlays still work by deliberately breaking a page and observing Next's real compile-error diagnostic, not just trusting docs. Visual refresh (muted gray-50 background, pill status badges, pill nav, hover states, consistent card treatment) applied across all pages and verified via live HTML from the container, not screenshots. Verdict from actually looking at it, though: still visually flat relative to what was wanted — see Prompt 5.
+
+## Prompt 5 — Bold visual richness pass
+
+**Constraint change, explicit and deliberate — this reverses a rule stated in every prompt before it:** Prompts 1–4 all said "no shadcn/ui, no new component library." That's lifted **for this phase only**, on request, because the muted/flat Prompt 4 result wasn't enough — shadcn/ui and `lucide-react` are now permitted. If a future session reads only Prompts 1–4 in isolation, this note is why Prompt 5 looks like it contradicts them; it doesn't, the constraint was intentionally changed here.
+
+**One line held constant despite the library change:** the existing Redux `ui` slice and `ToastHost` remain the actual state/logic — this phase restyles their visual output, it does not re-plumb state management that Prompts 1–2 already built and verified working.
+
+**Prompt:**
+```
+Constraint change from earlier prompts, explicit: shadcn/ui and new npm
+packages are now allowed for this phase specifically. Install shadcn/ui
+properly for this stack — Next.js 16.2.10, App Router, Tailwind v4 — confirm
+the CLI's Tailwind v4 compatibility mode is actually used (don't assume;
+check shadcn's own docs/changelog for v4 support and verify the generated
+config integrates with the existing tailwind setup without breaking it).
+Add lucide-react for icons.
+
+Direction: bold & vibrant. Anchor on a single saturated accent — an
+indigo-to-violet gradient (e.g. indigo-600 -> violet-600) for primary
+actions, active nav state, and a gradient banner behind page headers.
+High-contrast dark text on white/near-white surfaces, not muted gray-on-gray.
+Status colors stay semantically distinct but more saturated (vivid red,
+amber, blue, green — not pastel).
+
+Adopt shadcn primitives where they raise quality: Button (primary actions
+get the gradient fill), Badge (status pills), Card (table/content
+containers — can include a subtle colored top border or shadow-lg for
+real depth, not just border-gray), Table, Skeleton (for LoadingState).
+lucide-react icons in the nav (one icon per section), on primary buttons
+(+ for New Order, refresh icon that spins on pending), and inline with
+status badges.
+
+Keep the existing Redux ui slice and ToastHost exactly as the state
+mechanism — restyle Toast's visual appearance to match the new palette,
+but do not replace it with a shadcn/sonner-driven toast system. Same for
+RTK Query mutations and the orderForm slice: presentation-layer change
+only, zero logic/state-management changes.
+
+Apply consistently across Orders, Order Detail, Analytics, New Order, and
+Fraud Flags. Confirm after the restyle that order creation, transitions,
+error boundaries, and empty states (all built and verified in Prompts 1-4)
+still function identically — this phase must not regress any of that.
+```
+
+**Review checklist:**
+- Confirm shadcn's CLI actually detected/used Tailwind v4 mode (check the generated `components.json`/config, don't just assume the install succeeded silently).
+- Visual check across all 5 pages for consistency — same failure mode as before: one page gets the full treatment, others lag behind.
+- Functionally re-verify (not just visually): create an order, transition it, trigger an error boundary, trigger an empty state — all should work exactly as before, just look different.
+- Confirm `ToastHost` still reads from Redux `ui.toasts` — check the diff doesn't quietly introduce a second toast mechanism alongside it.
+- Check bundle size sanity — shadcn only pulls in the specific components you add, not a monolith; confirm `node_modules` growth looks like "a few components," not "an entire design system."
+
+**Status: DONE — but the shipped direction is not "bold & vibrant."** This took three rounds to land, worth recording accurately rather than leaving the original brief standing as if it's what got built:
+
+1. **Bold pass** (as originally prompted): shadcn/ui + lucide-react installed, indigo→violet gradients on buttons/nav/header banner, saturated solid status pills, icon-chip stat cards.
+2. **Reference-matching pass**: compared against the person's actual design references and found the biggest structural gap was nav architecture (top bar vs. sidebar — 3 of 4 references used a left sidebar). Replaced `NavBar.tsx` with `Sidebar.tsx`. Switched solid saturated status pills to dot+tinted badges to match a specific reference more closely.
+3. **"Premium" pull-back pass**: the bold gradient treatment was judged too busy once seen live. Removed the gradient banner (replaced with clean typography + a bottom border), swapped gradient buttons for solid `indigo-600` + soft shadow, sidebar became a solid near-black `slate-950` surface with a quiet left-accent-border active state instead of a filled gradient pill, toasts became white cards with a colored left border instead of solid color blocks, cards dropped `shadow-lg` + colored top border for a quieter `shadow-sm`. Net effect: closer to "elegant & premium" (the alternative direction originally offered, not selected at the time) than to "bold & vibrant" as prompted.
+
+**Bugs found and fixed across the three rounds:**
+- Base UI's `Button` defaults to expecting a native `<button>` when rendered as a `<Link>` — needed `nativeButton={false}` on every button-as-link instance (found live on "New Order" and "Clear"; worth a `grep` sweep to confirm no third instance was missed).
+- New npm dependencies didn't reach the running container via `restart` alone — `node_modules` is baked into the image at build time, so a full `docker compose build web` was required, which cascaded into rebuilding 4 other containers; the named volume was confirmed to preserve all data before proceeding.
+- A Turbopack cache "Out of memory" log during a large recompile was correctly triaged as WSL2 resource pressure from a long session, not app breakage — the same `rm -rf apps/web/.next` + restart fix already in the README applies if it ever escalates to actually corrupting responses.
+
+**Follow-up items flagged after the final pass, not yet independently confirmed:** whether the sidebar's icon-only-rail-below-`md` behavior was actually resize-tested on a real narrow viewport (distinct from Prompt 3's top-nav fix, since a sidebar has different narrow-viewport failure modes); whether the old `NavBar.tsx` and any now-unused gradient utility classes from the bold pass were actually deleted, not just superseded; whether Analytics' icon-chip stat cards and gradient chart bar fill were re-checked against the final restrained palette, or are a leftover bold-era element now visually inconsistent with the rest.
