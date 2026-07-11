@@ -15,7 +15,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
     <div>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="truncate text-2xl font-semibold text-gray-900" title={order.id}>
+          <h1 className="truncate text-2xl font-bold tracking-tight text-gray-900" title={order.id}>
             Order {order.id}
           </h1>
           <p className="mt-1 truncate text-sm text-gray-500" title={order.traceId}>
@@ -84,7 +84,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             </thead>
             <tbody className="divide-y divide-gray-100">
               {order.items.map((item) => (
-                <tr key={item.id}>
+                <tr key={item.id} className="hover:bg-gray-100">
                   <td className="py-2 pr-4">{item.sku}</td>
                   <td className="py-2 pr-4">{item.qty}</td>
                   <td className="py-2 pr-4">{formatMoney(item.unitPrice)}</td>

@@ -26,7 +26,7 @@ export function Toast({
   return (
     <div
       role="status"
-      className={`flex items-start gap-3 rounded-md border px-4 py-3 text-sm shadow-sm ${TYPE_STYLE[toast.type]}`}
+      className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm shadow-sm ${TYPE_STYLE[toast.type]}`}
     >
       <p className="flex-1">{toast.message}</p>
       <button

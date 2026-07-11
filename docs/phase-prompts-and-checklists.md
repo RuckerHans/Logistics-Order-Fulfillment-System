@@ -328,3 +328,53 @@ backend services.
 - Resize the browser to a phone width and check: does the orders table scroll horizontally instead of squishing, do transition buttons wrap instead of overflowing, do long IDs truncate cleanly?
 - Confirm empty states render correctly for a genuinely empty result (e.g. filter fraud flags by a nonexistent order ID) rather than an empty table with just headers.
 - Confirm no page picked up an unnecessary `'use client'` directive as a side effect of this phase's changes.
+
+**Status: DONE.** Fixed the whole-page horizontal scroll at its actual source (`NavBar.tsx`'s `flex-wrap`, not called out explicitly in the original brief but correctly caught as the real root cause affecting every page). Tables, long-UUID truncation (fixed a `break-all` that was actively violating the no-mid-character-wrapping requirement), button/filter wrapping, and empty states all verified against real seeded data, not assumed. Two more `.next`/Turbopack bind-mount collisions hit and self-recovered during verification — same documented failure mode from Phases 2, both times correctly diagnosed and fixed without needing to re-derive the cause.
+
+## Prompt 4 — Remove dev indicator + visual design refresh
+
+**Note:** this project is on Next.js 16.2.10 — newer than general training knowledge should be trusted for config syntax. The `devIndicators` config shape has changed across Next versions; confirm against this exact version's docs before assuming the syntax below is still current if revisiting this later.
+
+**Prompt:**
+```
+Two independent changes, no functional/behavior change to either:
+
+1. Remove the floating Next.js dev-mode indicator (the circular badge
+   bottom-left in every page). This project is on Next.js 16.2.10 — set
+   devIndicators: false in apps/web/next.config.ts. Confirm this is the
+   correct config key for this exact version by checking the installed
+   Next.js version's own docs/changelog, not assumed from general knowledge,
+   since this config has changed shape across Next versions. Confirm
+   compile/runtime error overlays still appear after this change (Next's
+   own docs state they should) — deliberately break something and check.
+
+2. Visual design refresh — Tailwind only, still no shadcn/ui, no new
+   component library, no new dependencies. Current look is functionally
+   correct but visually flat (plain white background, thin unstyled table,
+   no hover states, nav using only bold+underline for active state).
+   Target direction: muted page background (bg-gray-50 or similar) with
+   white bordered cards (border + rounded-lg, not heavy box-shadow) for
+   the table/content containers; status shown as a colored pill/badge
+   (rounded-full, colored bg + text, not just a colored dot) — Cancelled
+   red, Placed blue/gray, Payment Confirmed/Picking/Packed/Shipped in a
+   progressing color scheme, Delivered green; table rows get a subtle
+   hover background; header/page titles get clearer typographic hierarchy
+   (bold dark heading, muted gray secondary metadata like timestamps);
+   nav gets a pill or underline-on-active treatment distinct from inactive
+   links, not just font-weight.
+
+Apply consistently across Orders, Order Detail, Analytics, and Fraud
+Flags — this is a global style pass, not a one-page mockup. Reuse the
+existing ErrorState/LoadingState/EmptyState/PageHeader components' visual
+language rather than introducing a second, inconsistent style alongside
+them.
+
+Do not touch backend services, Redux logic, or data-fetching behavior —
+this phase is CSS/markup only, same restriction as Prompt 3.
+```
+
+**Review checklist (human-verified — same caveat as Prompt 3, Claude Code cannot see this):**
+- Confirm the dev indicator is actually gone on every page (not just the one it happened to be tested on), and that a deliberately-broken build still shows Next's error overlay.
+- Compare Orders, Order Detail, Analytics, and Fraud Flags side by side for consistency — a common failure mode here is polishing the page used as the example and leaving the other three untouched or inconsistent.
+- Confirm status badges are readable and distinguishable at a glance across all 7 states, not just whichever one was visible during development.
+- Confirm `ErrorState`/`EmptyState` still look visually consistent with the refreshed style, not left behind in the old flat look.

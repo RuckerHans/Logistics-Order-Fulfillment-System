@@ -2,7 +2,7 @@
 
 /* Single (light) theme by design -- no dark-mode requirement for this app. */
 :root {
-  --background: #f9f9f7;
+  --background: #f9fafb;
   --foreground: #0b0b0b;
 }
 

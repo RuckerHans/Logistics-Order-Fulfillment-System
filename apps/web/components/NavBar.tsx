@@ -19,7 +19,7 @@ export function NavBar() {
         <Link href="/" className="text-lg font-semibold text-gray-900">
           Logistics Ops
         </Link>
-        <nav className="flex flex-wrap gap-x-6 gap-y-2 text-sm font-medium">
+        <nav className="flex flex-wrap gap-x-2 gap-y-2 text-sm font-medium">
           {LINKS.map((link) => {
             const active = link.match(pathname ?? "");
             return (
@@ -28,8 +28,8 @@ export function NavBar() {
                 href={link.href}
                 className={
                   active
-                    ? "border-b-2 border-gray-900 pb-1 text-gray-900"
-                    : "border-b-2 border-transparent pb-1 text-gray-500 hover:text-gray-900"
+                    ? "rounded-full bg-gray-900 px-3 py-1.5 text-white"
+                    : "rounded-full px-3 py-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900"
                 }
               >
                 {link.label}

@@ -26,7 +26,7 @@ export default async function AnalyticsPage() {
       <PageHeader title="Analytics" actions={<RefreshButton />} />
 
       {anyError && (
-        <div className="mt-6 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           Some analytics data could not be loaded from the analytics service.
         </div>
       )}
@@ -34,13 +34,13 @@ export default async function AnalyticsPage() {
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="rounded-lg border border-gray-200 bg-white p-5">
           <h3 className="text-sm font-medium text-gray-500">Total Orders Placed</h3>
-          <p className="mt-2 text-2xl font-semibold text-gray-900">
+          <p className="mt-2 text-2xl font-bold text-gray-900">
             {summary ? summary.totalOrdersPlaced.toLocaleString() : "—"}
           </p>
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-5">
           <h3 className="text-sm font-medium text-gray-500">Total Order Value</h3>
-          <p className="mt-2 text-2xl font-semibold text-gray-900">
+          <p className="mt-2 text-2xl font-bold text-gray-900">
             {summary ? formatMoney(summary.totalOrderValue) : "—"}
           </p>
         </div>
@@ -63,14 +63,14 @@ export default async function AnalyticsPage() {
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <h2 className="font-medium text-gray-900">Orders per Hour</h2>
+          <h2 className="font-semibold text-gray-900">Orders per Hour</h2>
           <p className="text-sm text-gray-500">Last 24 hours</p>
           <div className="mt-4">
             <OrdersPerHourChart data={oph} />
           </div>
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <h2 className="font-medium text-gray-900">Average Time in Status</h2>
+          <h2 className="font-semibold text-gray-900">Average Time in Status</h2>
           <p className="text-sm text-gray-500">Before transitioning to the next status</p>
           <div className="mt-4">
             <TimeInStatusChart data={tis} />

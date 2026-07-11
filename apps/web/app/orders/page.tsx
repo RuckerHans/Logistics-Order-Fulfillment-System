@@ -5,6 +5,7 @@ import { Pagination } from "@/components/Pagination";
 import { RefreshButton } from "@/components/RefreshButton";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
+import { ErrorState } from "@/components/ErrorState";
 import { formatDateTime, formatMoney } from "@/lib/format";
 
 export default async function OrdersPage({
@@ -39,8 +40,8 @@ export default async function OrdersPage({
       />
 
       {error && (
-        <div className="mt-6 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Could not reach the order service: {error}
+        <div className="mt-6">
+          <ErrorState title="Couldn't load orders" message={`Could not reach the order service: ${error}`} />
         </div>
       )}
 
@@ -65,7 +66,7 @@ export default async function OrdersPage({
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {result.data.map((order) => (
-                  <tr key={order.id} className="hover:bg-gray-50">
+                  <tr key={order.id} className="hover:bg-gray-100">
                     <td className="px-4 py-3 font-mono text-xs text-gray-700">
                       <Link href={`/orders/${order.id}`} className="hover:underline" title={order.id}>
                         {order.id.slice(0, 8)}…

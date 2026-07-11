@@ -57,7 +57,7 @@ export function OrderForm() {
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       {validationErrors.length > 0 && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <ul className="list-inside list-disc space-y-0.5">
             {validationErrors.map((err, i) => (
               <li key={i}>{err}</li>

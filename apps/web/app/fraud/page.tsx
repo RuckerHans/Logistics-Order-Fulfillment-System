@@ -4,6 +4,7 @@ import { SeverityBadge } from "@/components/SeverityBadge";
 import { RefreshButton } from "@/components/RefreshButton";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
+import { ErrorState } from "@/components/ErrorState";
 import { formatDateTime } from "@/lib/format";
 
 export default async function FraudPage({
@@ -40,7 +41,7 @@ export default async function FraudPage({
         {orderId && (
           <Link
             href="/fraud"
-            className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
             Clear
           </Link>
@@ -48,8 +49,8 @@ export default async function FraudPage({
       </form>
 
       {error && (
-        <div className="mt-6 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Could not reach the fraud service: {error}
+        <div className="mt-6">
+          <ErrorState title="Couldn't load fraud flags" message={`Could not reach the fraud service: ${error}`} />
         </div>
       )}
 
@@ -73,7 +74,7 @@ export default async function FraudPage({
             </thead>
             <tbody className="divide-y divide-gray-100">
               {flags.map((flag) => (
-                <tr key={flag.id} className="hover:bg-gray-50">
+                <tr key={flag.id} className="hover:bg-gray-100">
                   <td className="px-4 py-3 font-mono text-xs text-gray-700">
                     <Link href={`/orders/${flag.order_id}`} className="hover:underline" title={flag.order_id}>
                       {flag.order_id.slice(0, 8)}…
