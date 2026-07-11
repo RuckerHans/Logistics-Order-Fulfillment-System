@@ -230,10 +230,15 @@ a clean message with a working retry.
 **Review checklist:**
 - Confirm `<Provider>` is in a dedicated `'use client'` file, not pasted directly into `layout.tsx` (which would either error or force the whole layout client-side).
 - Manually dispatch a toast and confirm it auto-dismisses and cleans up its timeout on unmount (navigate away before the timeout fires — no console warning about a state update on an unmounted component).
+- **Also confirm dismiss-before-timeout cleanup, not just unmount cleanup** — click a toast's close button before its auto-dismiss timer fires, then wait past the timeout and confirm nothing errors trying to dismiss an already-gone toast. Found worth adding after Prompt 1's actual testing — dismiss and auto-dismiss need to share one cleanup path, not two independent ones.
 - Temporarily throw inside each of the three pages and confirm: the error.tsx catches it, shows a clean message, `reset()` actually retries rendering, and nothing resembling a stack trace/file path/digest appears in the rendered output.
 - Confirm the rest of the app (order list, detail, analytics reads) still renders via Server Components exactly as before — this phase should change zero read behavior.
 
+**Status: DONE.** All checks confirmed by actual runtime testing (not code inspection alone): `<Provider>` correctly isolated in `providers.tsx`; toast auto-dismiss, manual dismiss, and unmount cleanup all verified with no stale-timer warnings; all three error boundaries caught forced throws, `reset()` re-rendered cleanly, no stack/digest/file path leaked into rendered output; Server Component read behavior confirmed unchanged. Verification technique worth carrying forward: throws were triggered via a **temporary client child component**, not by adding `'use client'` to the page itself — this is the correct way to test without accidentally invalidating the thing being tested (a page-level `'use client'` would silently break the Server Component architecture the test is supposed to confirm stayed intact).
+
 ### Prompt 2 — Feature wiring: RTK Query, form migration, transitions, auto-refresh
+
+**Testing technique carried forward from Prompt 1 — use this again here:** when testing the transition buttons and order form, verify their Client Component boundary is exactly as narrow as intended (the button/form itself, not the surrounding page) the same way Prompt 1 verified error boundaries — a temporary client child/test harness, not by converting the page itself to `'use client'` to make testing easier.
 
 **Prompt:**
 ```

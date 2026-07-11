@@ -1,84 +1,65 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
-
-interface ItemRow {
-  sku: string;
-  qty: string;
-  unitPrice: string;
-}
-
-function emptyRow(): ItemRow {
-  return { sku: "", qty: "1", unitPrice: "" };
-}
+import { useAppDispatch, useAppSelector } from "@/store/hooks";
+import { useCreateOrderMutation, rtkErrorMessages } from "@/store/api";
+import {
+  customerIdSet,
+  deliveryAddressSet,
+  branchIdSet,
+  itemAdded,
+  itemRemoved,
+  itemUpdated,
+  validationErrorsSet,
+  orderFormReset,
+  type OrderFormItem,
+} from "@/store/slices/orderFormSlice";
+import { toastAdded } from "@/store/slices/uiSlice";
 
 export function OrderForm() {
   const router = useRouter();
-  const [customerId, setCustomerId] = useState("");
-  const [deliveryAddress, setDeliveryAddress] = useState("");
-  const [branchId, setBranchId] = useState("");
-  const [items, setItems] = useState<ItemRow[]>([emptyRow()]);
-  const [submitting, setSubmitting] = useState(false);
-  const [errors, setErrors] = useState<string[]>([]);
+  const dispatch = useAppDispatch();
+  const { customerId, deliveryAddress, branchId, items, validationErrors } = useAppSelector(
+    (state) => state.orderForm,
+  );
+  const [createOrder, { isLoading }] = useCreateOrderMutation();
 
-  function updateItem(index: number, field: keyof ItemRow, value: string) {
-    setItems((prev) => prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
-  }
-
-  function addItem() {
-    setItems((prev) => [...prev, emptyRow()]);
-  }
-
-  function removeItem(index: number) {
-    setItems((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev));
+  function updateItem(index: number, field: keyof OrderFormItem, value: string) {
+    dispatch(itemUpdated({ index, field, value }));
   }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setErrors([]);
-    setSubmitting(true);
+    dispatch(validationErrorsSet([]));
+
+    const payload = {
+      customerId: customerId.trim(),
+      deliveryAddress: deliveryAddress.trim(),
+      branchId: branchId.trim(),
+      items: items.map((row) => ({
+        sku: row.sku.trim(),
+        qty: Number(row.qty),
+        unitPrice: Number(row.unitPrice),
+      })),
+    };
+
     try {
-      const payload = {
-        customerId: customerId.trim(),
-        deliveryAddress: deliveryAddress.trim(),
-        branchId: branchId.trim(),
-        items: items.map((row) => ({
-          sku: row.sku.trim(),
-          qty: Number(row.qty),
-          unitPrice: Number(row.unitPrice),
-        })),
-      };
-
-      const res = await fetch("/api/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        const message: string[] = Array.isArray(data?.message)
-          ? data.message
-          : [data?.message ?? `Request failed with status ${res.status}`];
-        setErrors(message);
-        setSubmitting(false);
-        return;
-      }
-
-      router.push(`/orders/${data.id}`);
-    } catch {
-      setErrors(["Could not reach the order service. Please try again."]);
-      setSubmitting(false);
+      const order = await createOrder(payload).unwrap();
+      dispatch(toastAdded({ type: "success", message: "Order placed successfully." }));
+      dispatch(orderFormReset());
+      router.push(`/orders/${order.id}`);
+    } catch (err) {
+      dispatch(validationErrorsSet(rtkErrorMessages(err)));
     }
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      {errors.length > 0 && (
+      {validationErrors.length > 0 && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <ul className="list-inside list-disc space-y-0.5">
-            {errors.map((err, i) => (
+            {validationErrors.map((err, i) => (
               <li key={i}>{err}</li>
             ))}
           </ul>
@@ -90,7 +71,7 @@ export function OrderForm() {
         <input
           required
           value={customerId}
-          onChange={(e) => setCustomerId(e.target.value)}
+          onChange={(e) => dispatch(customerIdSet(e.target.value))}
           placeholder="uuid"
           className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:border-gray-500 focus:outline-none"
         />
@@ -102,7 +83,7 @@ export function OrderForm() {
         <input
           required
           value={deliveryAddress}
-          onChange={(e) => setDeliveryAddress(e.target.value)}
+          onChange={(e) => dispatch(deliveryAddressSet(e.target.value))}
           className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
         />
       </div>
@@ -112,7 +93,7 @@ export function OrderForm() {
         <input
           required
           value={branchId}
-          onChange={(e) => setBranchId(e.target.value)}
+          onChange={(e) => dispatch(branchIdSet(e.target.value))}
           placeholder="branch_01"
           className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
         />
@@ -121,7 +102,11 @@ export function OrderForm() {
       <div>
         <div className="flex items-center justify-between">
           <label className="block text-sm font-medium text-gray-700">Items</label>
-          <button type="button" onClick={addItem} className="text-sm font-medium text-gray-700 hover:text-gray-900">
+          <button
+            type="button"
+            onClick={() => dispatch(itemAdded())}
+            className="text-sm font-medium text-gray-700 hover:text-gray-900"
+          >
             + Add item
           </button>
         </div>
@@ -157,7 +142,7 @@ export function OrderForm() {
               />
               <button
                 type="button"
-                onClick={() => removeItem(i)}
+                onClick={() => dispatch(itemRemoved(i))}
                 disabled={items.length === 1}
                 className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-500 hover:bg-gray-50 disabled:opacity-40"
               >
@@ -170,10 +155,10 @@ export function OrderForm() {
 
       <button
         type="submit"
-        disabled={submitting}
+        disabled={isLoading}
         className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
       >
-        {submitting ? "Placing order…" : "Place Order"}
+        {isLoading ? "Placing order…" : "Place Order"}
       </button>
     </form>
   );

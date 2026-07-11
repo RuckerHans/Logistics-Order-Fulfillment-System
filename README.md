@@ -217,6 +217,27 @@ host, then `docker compose restart <affected-service>` (a restart is enough;
 a full `docker compose build` is only needed if you changed a *dependency*
 of the contracts package, not its own source).
 
+**`apps/web` starts throwing plain-text `Internal Server Error` (not JSON)
+on every request, or the container logs show `TurbopackInternalError:
+Failed to restore task data (corrupted database or bug)`.** `infra-web-1`
+bind-mounts `apps/web`, and its live `next dev` process keeps an open
+Turbopack persistent cache database under `apps/web/.next/dev/cache/`. Any
+host-side command that touches that same `.next` directory while the
+container is running — `rm -rf apps/web/.next`, or running `next build` on
+the host against the same workspace — can corrupt that cache mid-write,
+since both processes see the identical files through the bind mount. Fix:
+`rm -rf apps/web/.next` once more to fully clear the corrupted cache, then
+`docker compose restart web` to let it regenerate cleanly. To avoid it: run
+build/clean commands for `apps/web` only inside the container (or stop
+`infra-web-1` first) while it's up.
+
+**A newly created file inside a bind-mounted service directory doesn't
+seem to load, even though editing an existing file triggers a rebuild
+fine.** Turbopack's file watcher can miss a brand-new file over a Docker
+bind mount in a way it doesn't miss edits to files it's already watching.
+If a new component/route isn't picking up, try touching an existing file
+in the same directory to force a rebuild, or restart the container.
+
 ---
 
 ## Why three different queues, not one
