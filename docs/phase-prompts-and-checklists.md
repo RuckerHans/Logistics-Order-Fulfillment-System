@@ -168,3 +168,148 @@ project is local-only and why, rather than leaving it unmentioned.
 - The full-stack `down -v && up` — did it actually succeed with zero manual intervention, or did something need a restart/reorder that should be reflected in a healthcheck/`depends_on` fix rather than papered over?
 - Read the README's rationale section yourself — could you defend every sentence in an interview without looking anything up? If a sentence describes something that isn't quite how it ended up being built (the outbox timing, the reply queue's retry policy, the two-tier role model), fix the README, don't leave the aspirational version in.
 - Confirm the AWS/Terraform decision is explicitly stated in the README, not silently absent.
+
+**Status: DONE, committed.** Real bugs found: CI's contract-drift-test job existed only in prose before this phase (never spliced into the actual YAML); all 5 NestJS services were missing ESLint configs since Phase 1 (uncaught because no CI existed to run lint until now); the RabbitMQ setup race (amqp-connection-manager's concurrent `addSetup` callbacks racing a queue's own assertion — masked in every prior phase by RabbitMQ queues persisting across dev sessions that never got `down -v`'d, only surfaced on the first-ever full-stack boot); fraud-service's `--reload` crashing under WSL2's shared inotify budget (fixed via `WATCHFILES_FORCE_POLLING`). README expanded into a full guide with a seed script (`scripts/seed.sql`) closing the previously-flagged unscripted-test-data gap. AWS/Terraform section intentionally left as-is pending separate work.
+
+---
+
+## Frontend Improvement Plan (post-Phase 6)
+
+Scope: improve the existing Next.js app in place — no shadcn/ui, no replacing Tailwind, no migrating Server Component reads to client-side fetching. Adds Redux Toolkit for client state (toasts, auto-refresh preference, order form draft) and RTK Query for exactly two mutations (create order, transition order). Sequenced as three independently-reviewable prompts rather than one large one, since the riskiest decisions (Client/Server component boundaries, where RTK Query actually points) are cheapest to catch early.
+
+**Two risks worth stating explicitly before Prompt 1, since they're easy to get subtly wrong:**
+1. RTK Query must call the existing same-origin Route Handler proxies (`/api/orders`, `/api/orders/:id/transition`) — not backend container hostnames, which the browser cannot resolve.
+2. Only the specific interactive leaf components (the new-order form, the transition buttons) should become Client Components — not the surrounding pages. A common failure mode is one interactive button forcing `'use client'` onto an entire page, silently undoing Phase 5's SSR architecture.
+3. `router.refresh()` after a successful transition only shows fresh data if the order-detail page's server-side fetch uses `cache: 'no-store'` (or equivalent) — confirm this rather than assume it.
+
+### Prompt 1 — Foundation: Redux store, reusable components, error boundaries
+
+**Prompt:**
+```
+Add Redux Toolkit + React Redux to apps/web without touching backend services
+or migrating any read page to client-side fetching.
+
+Store setup:
+- Redux store, a client-component Provider wrapper (Redux's <Provider> cannot
+  go directly in the root layout.tsx, since that's a Server Component by
+  default — create a dedicated providers.tsx with 'use client' that wraps
+  {children}, and use that in layout.tsx).
+- Typed useAppDispatch/useAppSelector hooks.
+- ui slice: toasts (array, each with id/type/message), autoRefreshEnabled
+  (boolean), lastError (string | null).
+- orderForm slice: customerId, deliveryAddress, branchId, items (array of
+  {sku, qty, unitPrice}), validationErrors, plus a reset action.
+
+Reusable components (plain Tailwind, no shadcn/ui, no new UI library):
+- ErrorState: title, message, optional actionLabel/onAction. No stack
+  traces, file paths, or error.digest ever rendered to the user.
+- LoadingState: simple, reusable loading indicator.
+- ToastHost: reads ui.toasts from Redux, renders success/error/info toasts,
+  each dismissible and auto-dismissing after ~4s via a per-toast timeout
+  with cleanup on unmount (not a shared interval). Mount once, e.g. in
+  providers.tsx.
+- PageHeader: title + optional right-aligned actions slot.
+
+Error boundaries — use Next.js App Router's actual error.tsx convention
+(required to be a Client Component), not a custom mechanism:
+- apps/web/app/orders/error.tsx
+- apps/web/app/orders/[id]/error.tsx
+- apps/web/app/analytics/error.tsx
+Each renders ErrorState with a clean message, and calls the reset() function
+Next.js provides as the retry action. error.digest is fine to console.error
+for debugging but must never render in the UI.
+
+Do not wire any of this into the order form or transition buttons yet —
+that's the next phase. This phase is infrastructure only, and should be
+independently verifiable: the app should build, the toast host should be
+mountable with a manually-dispatched test toast, and each error.tsx should
+be triggerable (e.g. by temporarily throwing in the relevant page) and show
+a clean message with a working retry.
+```
+
+**Review checklist:**
+- Confirm `<Provider>` is in a dedicated `'use client'` file, not pasted directly into `layout.tsx` (which would either error or force the whole layout client-side).
+- Manually dispatch a toast and confirm it auto-dismisses and cleans up its timeout on unmount (navigate away before the timeout fires — no console warning about a state update on an unmounted component).
+- Temporarily throw inside each of the three pages and confirm: the error.tsx catches it, shows a clean message, `reset()` actually retries rendering, and nothing resembling a stack trace/file path/digest appears in the rendered output.
+- Confirm the rest of the app (order list, detail, analytics reads) still renders via Server Components exactly as before — this phase should change zero read behavior.
+
+### Prompt 2 — Feature wiring: RTK Query, form migration, transitions, auto-refresh
+
+**Prompt:**
+```
+Wire the Redux foundation from the previous phase into real functionality.
+
+RTK Query — createOrder and transitionOrder mutations only. baseUrl must be
+the existing same-origin Route Handler proxies (/api/orders,
+/api/orders/:id/transition) — NOT the backend container hostnames, which
+cannot resolve from the browser. Confirm this by checking network requests
+in the browser, not just reading the code.
+
+Order form (apps/web/app/orders/new — this page's form becomes a Client
+Component; the surrounding route can stay as minimal a shell as possible):
+- Move draft state (customerId, deliveryAddress, branchId, items) from
+  local useState into the orderForm Redux slice.
+- Validation errors stay visible and readable, sourced from the slice.
+- Disable submit while the createOrder mutation is pending.
+- On success: show a success toast, dispatch orderForm's reset action, then
+  navigate to the new order's detail page (in that order — reset before
+  navigating away, not after, so there's no stale-form flash if navigation
+  is slow).
+- On failure: show an error toast (or inline error, whichever reads better
+  for the failure) with the actual backend message, not a generic string.
+
+Order transitions (order detail page's status-change buttons — these
+buttons become a small Client Component; the rest of the page stays server-
+rendered):
+- Use the transitionOrder mutation's pending/error state to disable buttons
+  during the request.
+- Success: toast, then router.refresh() (from next/navigation) so the
+  Server Component re-fetches and shows the new status. Before assuming
+  this works, confirm the order-detail page's server-side fetch actually
+  uses cache: 'no-store' (or equivalent) — if it doesn't, router.refresh()
+  may silently re-render the same cached response instead of fresh data.
+- Failure: clean error toast with the actual backend error message (Order
+  API already returns specific 400 messages for invalid transitions — surface
+  that, not a generic "something went wrong").
+
+Auto-refresh: move the enabled/disabled preference into ui.autoRefreshEnabled,
+shared across every page that currently has its own local auto-refresh
+toggle, so toggling it on one page is reflected on others. Keep the actual
+refresh mechanism (however it currently polls/refetches) unchanged — only
+the on/off state moves to Redux.
+```
+
+**Review checklist:**
+- Open browser devtools' Network tab while creating an order — confirm the request actually goes to `/api/orders` (same-origin), not `order-api:3000` or `localhost:3000` directly.
+- Confirm the order-detail page's fetch has `cache: 'no-store'` (or a revalidate setting short enough to matter) — transition an order, click confirm, and verify the displayed status actually changes without a manual page reload.
+- Force a transition that the backend will reject (e.g. `PLACED` → `SHIPPED` directly) and confirm the toast shows the real backend message, not a generic error.
+- Toggle auto-refresh on one page, navigate to another page that also has it, and confirm the toggle state carried over.
+- Confirm only the form/button components are `'use client'` — check that the order list and detail pages' main content still renders without a client-side loading flash on first load (a sign something got accidentally converted to client-side fetching).
+
+### Prompt 3 — Responsive/UI polish
+
+**Prompt:**
+```
+Polish only — no new functionality, no Redux changes.
+
+- Tables (orders list, fraud flags): wrap in a horizontally-scrollable
+  container on narrow viewports rather than squeezing columns.
+- Long UUIDs (order IDs, customer IDs, trace IDs): truncate with ellipsis
+  and a title attribute (or copy-to-clipboard) rather than overflowing or
+  wrapping mid-character.
+- Buttons (transition actions, filters): wrap cleanly (flex-wrap) on small
+  screens instead of overflowing or forcing horizontal scroll on the whole
+  page.
+- Keep existing card/panel sizing compact — no new padding/spacing scale.
+- Add a clean empty state (using the new LoadingState/ErrorState-adjacent
+  pattern, or a simple centered message) anywhere a page can legitimately
+  have zero data (empty order list, no fraud flags, no analytics data yet)
+  — some of this may already exist from Phase 5, don't duplicate it.
+
+Do not introduce shadcn/ui or any new component library. Do not touch
+backend services.
+```
+
+**Review checklist:**
+- Resize the browser to a phone width and check: does the orders table scroll horizontally instead of squishing, do transition buttons wrap instead of overflowing, do long IDs truncate cleanly?
+- Confirm empty states render correctly for a genuinely empty result (e.g. filter fraud flags by a nonexistent order ID) rather than an empty table with just headers.
